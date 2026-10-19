@@ -141,3 +141,7 @@ def test_cli_report_survives_a_legacy_console_encoding(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "stdout", console)
     assert main(["report", "--file", str(path), "--days", "3650"]) == 0
     assert "→" in raw.getvalue().decode("utf-8")
+
+
+def test_high_section_says_none_when_there_are_no_high_alerts():
+    assert section(report([rec("MEDIUM", "beaconing", 1)]), "HIGH alerts").strip() == "None."

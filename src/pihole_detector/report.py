@@ -80,7 +80,10 @@ def _offenders(records: list[dict]) -> list[str]:
 
 def _high_alerts(records: list[dict]) -> list[str]:
     lines = ["## HIGH alerts"]
-    for r in sorted((r for r in records if r["severity"] == HIGH), key=lambda r: r["time"]):
+    high = sorted((r for r in records if r["severity"] == HIGH), key=lambda r: r["time"])
+    if not high:
+        lines.append("None.")
+    for r in high:
         who = " · ".join(part for part in (r["client"], r.get("address")) if part)
         what = " ".join(part for part in (r["rule"], r.get("domain")) if part)
         message = f" - {r['message']}" if r.get("message") else ""
