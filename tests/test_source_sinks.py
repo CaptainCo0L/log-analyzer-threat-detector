@@ -114,6 +114,36 @@ def test_logout_deletes_session():
     assert ftl.calls[-1] == ("DELETE", "/auth") and api.sid is None
 
 
+# tail -------------------------------------------------------------------------
+from pihole_detector.model import Query
+from pihole_detector.source import Tail
+
+
+def mk(i, t, reply="IP"):
+    return Query(id=i, time=T0 + t, domain=f"d{i}.example", type="A", status="FORWARDED",
+                 reply=reply, client_ip="192.0.2.10")
+
+
+def test_tail_emits_each_query_once_across_overlapping_polls():
+    tail = Tail(T0)
+    assert [q.id for q in tail.feed([mk(1, 0), mk(2, 1)], now=T0 + 10)] == [1, 2]
+    assert [q.id for q in tail.feed([mk(2, 1), mk(3, 2)], now=T0 + 11)] == [3]
+    assert tail.since == T0 + 2 - 2
+
+
+def test_tail_holds_unanswered_until_reply_or_settle_timeout():
+    tail = Tail(T0, settle=5)
+    assert tail.feed([mk(1, 0, "UNKNOWN"), mk(2, 1)], now=T0 + 1.5) == [mk(2, 1)]
+    assert tail.since <= T0                       # next poll still covers the pending query
+    out = tail.feed([mk(1, 0, "NXDOMAIN"), mk(2, 1)], now=T0 + 3)
+    assert [(q.id, q.reply) for q in out] == [(1, "NXDOMAIN")]
+    # a retransmitted duplicate that FTL never answers is released after `settle`
+    tail = Tail(T0, settle=5)
+    assert tail.feed([mk(7, 0, "UNKNOWN")], now=T0 + 1) == []
+    assert [q.id for q in tail.feed([mk(7, 0, "UNKNOWN")], now=T0 + 6)] == [7]
+    assert tail.feed([mk(7, 0, "UNKNOWN")], now=T0 + 7) == []
+
+
 # sinks ------------------------------------------------------------------------
 def alert(sev="HIGH", rule="ti_match", msg="m", block=None):
     return Alert(time=T0, severity=sev, rule=rule, client="c", domain="d", message=msg,

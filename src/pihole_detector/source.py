@@ -116,6 +116,44 @@ class PiholeApi:
         return [Device.from_api(item) for item in result.get("devices") or []]
 
 
+class Tail:
+    """Turns repeated overlapping polls into a stream of each query exactly once.
+
+    A query polled before its answer arrives has reply UNKNOWN; it is held back for up to
+    `settle` seconds so rules see the final reply. Some stay UNKNOWN forever (FTL does not
+    answer a client's retransmitted duplicate), so after `settle` they are released as-is.
+    """
+
+    UNSETTLED = {None, "UNKNOWN"}
+
+    def __init__(self, start: float, settle: float = 5.0, overlap: float = 2.0):
+        self.mark = start          # poll from here (minus overlap) next time
+        self.settle = settle
+        self.overlap = overlap
+        self.done: set[tuple] = set()
+
+    @property
+    def since(self) -> float:
+        return self.mark - self.overlap
+
+    def feed(self, queries: list[Query], now: float) -> list[Query]:
+        ready, pending = [], []
+        for q in queries:
+            if q.key in self.done:
+                continue
+            if q.reply in self.UNSETTLED and now - q.time < self.settle:
+                pending.append(q)
+                continue
+            ready.append(q)
+            self.done.add(q.key)
+        if queries:
+            newest = max(q.time for q in queries)
+            self.mark = min([newest] + [q.time for q in pending])
+        floor = self.since
+        self.done = {k for k in self.done if k[1] >= floor}
+        return ready
+
+
 def read_replay(path: str | Path):
     """Yield ("query", Query) / ("devices", [Device]) events from a replay JSONL file.
 

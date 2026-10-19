@@ -13,7 +13,7 @@ from .config import Config
 from .detector import Detector
 from .intel import GravityIntel
 from .sinks import JsonlSink, Telegram
-from .source import ApiError, PiholeApi, read_replay
+from .source import ApiError, PiholeApi, Tail, read_replay
 from .state import State
 
 log = logging.getLogger("pihole_detector")
@@ -91,8 +91,7 @@ def cmd_run(cfg: Config) -> int:
     signal.signal(signal.SIGINT, stop)
 
     now = time.time()
-    last_time = max(det.state.get("last_time", now - 60), now - MAX_CATCHUP)
-    recent: set[tuple] = set()
+    tail = Tail(max(det.state.get("last_time", now - 60), now - MAX_CATCHUP))
     failures, down_since = 0, None
     next_devices = next_intel = 0.0
     log.info("running: push=%s poll=%.1fs threat domains=%d", cfg.push_enabled, cfg.poll_seconds, len(det.intel.threats))
@@ -107,14 +106,9 @@ def cmd_run(cfg: Config) -> int:
             if now >= next_devices:
                 det.process_devices(api.devices(), now)
                 next_devices = now + cfg.devices_seconds
-            queries = api.queries_since(last_time - 2)
-            for q in queries:
-                if q.key not in recent:
-                    det.process_query(q)
-            if queries:
-                last_time = max(last_time, queries[-1].time)
-                recent = {q.key for q in queries if q.time >= last_time - 2}
-                det.state.put("last_time", last_time)
+            for q in tail.feed(api.queries_since(tail.since), now):
+                det.process_query(q)
+            det.state.put("last_time", tail.mark)
             if failures >= cfg.fail_threshold and cfg.health_push_enabled:
                 det.telegram.send(f"Pi-hole API reachable again after {int(now - down_since)} s.", now, capped=False)
             failures, down_since = 0, None

@@ -15,14 +15,21 @@ def _candidate(q: Query, ctx: Context) -> bool:
     return "." in q.domain and not ctx.noisy.match(q.domain) and not q.domain.endswith(".arpa")
 
 
+ANSWERED = {"IP", "CNAME", "DOMAIN", "RRNAME"}
+
+
 class DgaSingle(QueryRule):
     """A random-looking name that *resolved*. NXDOMAIN ones are left to NxdomainBurst: a DGA
-    burst would otherwise also raise one alert per name, and the one that resolves is the C2."""
+    burst would otherwise also raise one alert per name, and the one that resolves is the C2.
+
+    Requires a positive answer, not merely "not NXDOMAIN": FTL leaves a client's retransmitted
+    duplicate at reply UNKNOWN forever, so UNKNOWN carries no information either way.
+    """
 
     name = "dga_single"
 
     def on_query(self, q: Query, seen: Seen, ctx: Context):
-        if q.reply == "NXDOMAIN" or not _candidate(q, ctx):
+        if q.reply not in ANSWERED or not _candidate(q, ctx):
             return []
         label = registrable_label(q.domain)
         if not looks_random(label):

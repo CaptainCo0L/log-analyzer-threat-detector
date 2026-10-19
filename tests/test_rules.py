@@ -60,6 +60,14 @@ def test_dga_ignores_normal_cdn_and_single_label(make_detector):
     assert det.process_query(q("en.wikipedia.org")) == []
 
 
+def test_dga_single_needs_a_positive_answer(make_detector):
+    det = make_detector()
+    # FTL leaves a retransmitted duplicate at UNKNOWN forever; that is not "resolved"
+    assert det.process_query(q("www.xkqjzvbwptrm.com", reply="UNKNOWN")) == []
+    assert det.process_query(q("www.xkqjzvbwptrm.com", reply="NXDOMAIN")) == []
+    assert rules_of(det.process_query(q("www.xkqjzvbwptrm.com", reply="CNAME"))) == ["dga_single"]
+
+
 # nxdomain_burst ---------------------------------------------------------------
 def _dga_labels(n=30, seed=7):
     import random
