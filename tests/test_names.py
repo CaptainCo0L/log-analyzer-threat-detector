@@ -137,3 +137,67 @@ def test_bonjour_sits_between_mdns_and_ssdp():
     table = rows(build_names_report([dev(A, "192.0.2.10"), dev(B, "192.0.2.11")], {}, found))
     assert table["192.0.2.10"][1:3] == ["Aswin's iPad", "Bonjour"]
     assert table["192.0.2.11"][1:3] == ["ipad", "mDNS"]
+
+
+# --- saving names, and using them in `report` ---------------------------------------------------
+
+import json
+
+from pihole_detector.__main__ import main
+from pihole_detector.namestore import NameStore
+
+
+def names_setup(tmp_path, comments=()):
+    gravity = tmp_path / "gravity.db"
+    gravity_with_clients(gravity, list(comments))
+    api = FakeApi([Device(hwaddr=A, ips=("192.0.2.10",), first_seen=T0, vendor="Acme"),
+                   Device(hwaddr=B, ips=("192.0.2.11",), first_seen=T0, vendor="Acme"),
+                   Device(hwaddr=C, ips=("192.0.2.12",), first_seen=T0, vendor="Sony Corporation")])
+    probe = lambda ips, wait: {"192.0.2.10": {"mDNS": "ipad", "SSDP": "upnp"}, "192.0.2.11": {"SSDP": "tv"}}
+    return Config(gravity_db=str(gravity), names_file=str(tmp_path / "names.json")), api, probe
+
+
+def test_names_without_save_writes_nothing(tmp_path):
+    cfg, api, probe = names_setup(tmp_path)
+    cmd_names(cfg, 1, api=api, probe=probe)
+    assert not (tmp_path / "names.json").exists()
+
+
+def test_names_save_stores_probe_names_but_never_vendor_guesses(tmp_path, capsys):
+    cfg, api, probe = names_setup(tmp_path, comments=[(A, "AswinsIpad")])
+    assert cmd_names(cfg, 1, api=api, probe=probe, save=True) == 0
+    saved = json.loads((tmp_path / "names.json").read_text(encoding="utf-8"))
+    assert {mac: e["name"] for mac, e in saved.items()} == {A: "ipad", B: "tv"}  # not C, a vendor guess
+    out = capsys.readouterr().out
+    assert "Saved 2 name(s)" in out and f"{B}: (none) -> tv" in out
+
+
+def test_report_shows_the_saved_name_for_older_alerts(tmp_path, capsys, monkeypatch):
+    store = NameStore(tmp_path / "names.json")
+    store.update({A: ("Aswins-iPad", "mDNS")}, T0)
+    store.save()
+    monkeypatch.setenv("NAMES_FILE", str(tmp_path / "names.json"))
+    monkeypatch.setenv("GRAVITY_DB", str(tmp_path / "none.db"))
+    alerts = tmp_path / "alerts.jsonl"
+    alerts.write_text(json.dumps({"time": T0, "severity": "HIGH", "rule": "ti_match", "client": "(old label)",
+                                  "domain": "x.example", "address": f"192.0.2.10 · {A}", "message": "m",
+                                  "evidence": {}}) + "\n", encoding="utf-8")
+    assert main(["report", "--file", str(alerts), "--days", "3650"]) == 0
+    out = capsys.readouterr().out
+    assert "Aswins-iPad" in out and "(old label)" not in out
+
+
+def test_report_prefers_a_clients_comment_over_the_saved_name(tmp_path, capsys, monkeypatch):
+    store = NameStore(tmp_path / "names.json")
+    store.update({A: ("desktop-x", "mDNS")}, T0)
+    store.save()
+    gravity_with_clients(tmp_path / "gravity.db", [(A, "AswinPC")])
+    monkeypatch.setenv("NAMES_FILE", str(tmp_path / "names.json"))
+    monkeypatch.setenv("GRAVITY_DB", str(tmp_path / "gravity.db"))
+    alerts = tmp_path / "alerts.jsonl"
+    alerts.write_text(json.dumps({"time": T0, "severity": "HIGH", "rule": "ti_match", "client": "x",
+                                  "domain": "x.example", "address": f"192.0.2.10 · {A}", "message": "m",
+                                  "evidence": {}}) + "\n", encoding="utf-8")
+    main(["report", "--file", str(alerts), "--days", "3650"])
+    out = capsys.readouterr().out
+    assert "AswinPC" in out and "desktop-x" not in out

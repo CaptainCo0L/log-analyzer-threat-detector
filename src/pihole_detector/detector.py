@@ -7,8 +7,10 @@ import time
 from collections import Counter
 
 from .config import Config
+from .discovery import discover
 from .domains import apex
 from .intel import DomainSet, GravityIntel
+from .namestore import NameStore, best_probe, relabel
 from .model import HIGH, Alert, Device, Query
 from .rules import Context, Seen
 from .rules.devices import IotOffBaseline, new_devices, silent_devices
@@ -22,8 +24,11 @@ log = logging.getLogger(__name__)
 
 
 class Detector:
-    def __init__(self, cfg: Config, state: State, intel: GravityIntel, jsonl: JsonlSink, telegram: Telegram):
+    def __init__(self, cfg: Config, state: State, intel: GravityIntel, jsonl: JsonlSink, telegram: Telegram,
+                 names: NameStore | None = None, probe=discover):
         self.cfg = cfg
+        self.names = names or NameStore(cfg.names_file)
+        self.probe = probe
         self.state = state
         self.intel = intel
         self.jsonl = jsonl
@@ -38,13 +43,17 @@ class Detector:
         self._last_prune = 0.0
 
     # identity -----------------------------------------------------------------
+    def display_name(self, mac: str | None, ip: str | None = None) -> str | None:
+        """A human-chosen name wins: the Pi-hole Clients comment, then a name discovery found."""
+        comments = self.intel.names
+        return (mac and comments.get(mac)) or (ip and comments.get(ip)) or self.names.name(mac) or None
+
     def identify(self, q: Query) -> tuple[str, str, str]:
-        """(ident, friendly label, address). Label prefers the Pi-hole Clients comment."""
+        """(ident, friendly label, address). Comment > discovered name > Pi-hole hostname > IP."""
         mac = self.ip_to_mac.get(q.client_ip)
         ident = mac or q.client_ip
         hostname = q.client_name if q.client_name and q.client_name != q.client_ip else None
-        names = self.intel.names
-        label = names.get(ident) or names.get(q.client_ip) or hostname or q.client_ip
+        label = self.display_name(mac or q.client_ip, q.client_ip) or hostname or q.client_ip
         address = " · ".join(filter(None, [q.client_ip, mac]))
         self.labels[ident] = label
         return ident, label, address
@@ -76,7 +85,7 @@ class Detector:
             if dev.is_real_mac:
                 for ip in dev.ips:
                     self.ip_to_mac[ip] = dev.hwaddr
-                self.labels.setdefault(dev.hwaddr, self.intel.names.get(dev.hwaddr) or dev.name or dev.hwaddr)
+                self.labels[dev.hwaddr] = self.display_name(dev.hwaddr) or self.labels.get(dev.hwaddr) or dev.name or dev.hwaddr
         first_run = not self.state.get("devices_seeded", False)
         alerts = new_devices(devices, self.ctx, now, quiet=first_run)
         self.state.put("devices_seeded", True)
@@ -91,9 +100,42 @@ class Detector:
                 rule.prune(now)
             self.state.prune(now)
             alerts = self.emit(silent_devices(self.ctx, now, self.labels))
+        self.names.reload_if_changed()
         if self.digests:
+            self.maybe_discover(now)  # first, so the report below already carries fresh names
             self.maybe_digest(now)
         return alerts
+
+    def maybe_discover(self, now: float) -> bool:
+        """Once a week, at report time: ask the known devices for their names and save them."""
+        local = time.localtime(now)
+        today = time.strftime("%Y-%m-%d", local)
+        if (local.tm_wday != self.cfg.discovery_weekday or local.tm_hour < self.cfg.digest_hour
+                or self.state.get("last_discovery_day") == today):
+            return False
+        self.state.put("last_discovery_day", today)  # marked first: a failure must not retry every poll
+        self.state.commit()
+        try:
+            self.discover_names(now)
+        except Exception:  # the report must still go out, with the names already saved
+            log.exception("weekly name discovery failed")
+        return True
+
+    def discover_names(self, now: float) -> None:
+        ips = sorted(ip for ip in self.ip_to_mac if "." in ip)  # IPv4 only
+        if not ips:
+            return
+        found = self.probe(ips, self.cfg.discovery_wait)
+        best = {}
+        for ip, evidence in found.items():
+            choice = best_probe(evidence)
+            if choice and ip in self.ip_to_mac:
+                best[self.ip_to_mac[ip]] = choice
+        changes = self.names.update(best, now)
+        self.names.save()
+        for mac, old, new in changes:
+            log.info("name for %s: %s -> %s", mac, old or "(none)", new)
+        log.info("name discovery: %d device(s) answered of %d probed", len(best), len(ips))
 
     # outputs ------------------------------------------------------------------
     def emit(self, alerts: list[Alert]) -> list[Alert]:
@@ -122,7 +164,8 @@ class Detector:
         due = local.tm_hour >= self.cfg.digest_hour and self.state.get("last_digest_day") != today
         if not (due or force):
             return False
-        text = build_digest(self.jsonl.since(last or 0), dict(self.stats), start=last or now, end=now)
+        records = relabel(self.jsonl.since(last or 0), lambda mac: self.display_name(mac))
+        text = build_digest(records, dict(self.stats), start=last or now, end=now)
         self.telegram.send(text, now, capped=False)
         self.state.put("last_digest", now)
         self.state.put("last_digest_day", today)

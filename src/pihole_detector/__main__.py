@@ -14,6 +14,7 @@ from .detector import Detector
 from .discovery import discover
 from .intel import GravityIntel, read_client_comments
 from .model import Alert
+from .namestore import NameStore, best_probe, relabel
 from .names import build_names_report, ipv4_of
 from .report import build_report, load_records
 from .sinks import JsonlSink, Telegram, build_digest, format_down, format_push, format_test, format_up
@@ -151,6 +152,7 @@ def main(argv=None) -> int:
     rep.add_argument("--file", help="alerts file (default: ALERTS_PATH)")
     nm = sub.add_parser("names", help="suggest names for Pi-hole's devices (mDNS/SSDP/NetBIOS); writes nothing")
     nm.add_argument("--wait", type=float, default=8, help="seconds to listen for replies")
+    nm.add_argument("--save", action="store_true", help="store the names found, for alerts and reports to use")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -176,7 +178,7 @@ def main(argv=None) -> int:
     if args.cmd == "report":
         return cmd_report(cfg, args.file, args.days)
     if args.cmd == "names":
-        return cmd_names(cfg, args.wait)
+        return cmd_names(cfg, args.wait, save=args.save)
     return cmd_run(cfg)
 
 
@@ -186,8 +188,9 @@ def utf8_stdout() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
 
 
-def cmd_names(cfg: Config, wait: float, api=None, probe=discover) -> int:
-    """Suggest names for Pi-hole's devices from mDNS/SSDP/NetBIOS. Reads and probes; writes nothing."""
+def cmd_names(cfg: Config, wait: float, api=None, probe=discover, save: bool = False) -> int:
+    """Suggest names for Pi-hole's devices from mDNS/SSDP/NetBIOS. Writes nothing unless --save, which
+    stores the probe names in the detector's own names file (never in Pi-hole)."""
     api = api or PiholeApi(cfg.pihole_url, cfg.pihole_password)
     try:
         devices = [d for d in api.devices() if d.is_real_mac]
@@ -196,6 +199,13 @@ def cmd_names(cfg: Config, wait: float, api=None, probe=discover) -> int:
     found = probe([ip for d in devices if (ip := ipv4_of(d))], wait)
     utf8_stdout()
     print(build_names_report(devices, read_client_comments(cfg.gravity_db), found), end="")
+    if save:
+        best = {d.hwaddr: choice for d in devices if (choice := best_probe(found.get(ipv4_of(d), {})))}
+        store = NameStore(cfg.names_file)
+        changes = store.update(best, time.time())
+        store.save()
+        print("\n".join([f"Saved {len(best)} name(s) to {cfg.names_file}",
+                         *(f"  {mac}: {old or '(none)'} -> {new}" for mac, old, new in changes)]))
     return 0
 
 
@@ -211,6 +221,9 @@ def cmd_report(cfg: Config, file: str | None, days: float) -> int:
         return 1
     else:
         records, skipped = [], 0
+    comments = read_client_comments(cfg.gravity_db)
+    store = NameStore(cfg.names_file)
+    records = relabel(records, lambda mac: comments.get(mac) or store.name(mac))
     utf8_stdout()
     print(build_report(records, start, end, push_cap=cfg.push_cap_per_hour, skipped=skipped), end="")
     return 0

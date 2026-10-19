@@ -30,6 +30,9 @@ class Config:
     extra_iot_clients: tuple[str, ...] = ()  # optional extra IoT MACs/IPs (comma separated)
     state_db: str = "/data/state.db"
     alerts_path: str = "/data/alerts.jsonl"
+    names_file: str = "/data/names.json"     # names found by `names --save` and the weekly discovery
+    discovery_weekday: int = 0               # Monday (0-6): discovery runs just before that day's report
+    discovery_wait: float = 10.0             # seconds to listen for replies
     telegram_token: str = field(default="", repr=False)
     telegram_chat_id: str = ""
     push_enabled: bool = False              # shadow mode by default

@@ -76,18 +76,32 @@ python -m pihole_detector replay FILE   # run a JSONL fixture through the pipeli
 python -m pihole_detector test-push     # send one Telegram test message
 python -m pihole_detector digest        # send the digest now
 python -m pihole_detector report        # Markdown review of alerts.jsonl (--days 7, --file PATH); sends nothing
-python -m pihole_detector names         # suggest names for Pi-hole's devices via mDNS/SSDP/NetBIOS (--wait 8); writes nothing
+python -m pihole_detector names         # suggest names for Pi-hole's devices via mDNS/SSDP/NetBIOS (--wait 8); --save keeps them
 ```
 
-`names` fills the gap left by a router that serves no reverse DNS: it asks each device Pi-hole
-knows about for its own name and prints a table plus a block to paste into Pi-hole's Clients
-comments (the detector already reads those). It never edits Pi-hole. Run it as a one-off
-container on the host network so the probes reach the LAN:
+### Device names
+
+A router that serves no reverse DNS leaves alerts naming devices `(ip, mac)`. `names` asks each
+device Pi-hole knows about for its own name (mDNS reverse lookup, Bonjour browse, SSDP, NetBIOS)
+and prints a table plus a block to paste into Pi-hole's Clients comments. It never edits Pi-hole.
+`names --save` also stores what it found in `data/names.json` (MAC → name, source, last confirmed).
+
+A device is named, in order, by: its **Pi-hole Clients comment**, then the **saved discovered
+name**, then Pi-hole's own hostname for it, then its IP. The daily report and `report` look names
+up when they are displayed, by the MAC in each alert, so a name found after an alert fired still
+shows; `alerts.jsonl` is never rewritten.
+
+The running service refreshes names itself: **every Monday at report time (`DISCOVERY_WEEKDAY`,
+`DIGEST_HOUR`) it probes the known devices over unicast (mDNS, SSDP, NetBIOS) and saves the
+answers, then sends that day's report.** A device that does not answer keeps its previous name. If
+discovery fails the report still goes out. The service sits on Docker's bridge network, so the
+multicast Bonjour browse only works from a manual run on the host network:
 
 ```bash
 sudo docker run --rm --network host --env-file /mnt/Home/apps/pihole/.env \
   -e PIHOLE_URL=http://127.0.0.1:8081 -e GRAVITY_DB=/pihole/gravity.db \
-  -v /mnt/Home/apps/pihole/etc-pihole:/pihole:ro pihole-detector:local names
+  -v /mnt/Home/apps/pihole/etc-pihole:/pihole:ro -v /mnt/Home/apps/pihole-detector/data:/data \
+  pihole-detector:local names --save
 ```
 
 All settings are environment variables named after the fields in
