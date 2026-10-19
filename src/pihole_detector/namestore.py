@@ -91,7 +91,8 @@ def relabel(records: list[dict], lookup) -> list[dict]:
     """
     out = []
     for record in records:
-        mac = mac_from_address(record.get("address", ""))
+        # Early alerts have no address; Pi-hole labelled such clients "(ip, mac)", which still holds the MAC.
+        mac = mac_from_address(record.get("address")) or mac_from_address(record.get("client"))
         name = lookup(mac) if mac else None
         out.append({**record, "client": name} if name else record)
     return out
