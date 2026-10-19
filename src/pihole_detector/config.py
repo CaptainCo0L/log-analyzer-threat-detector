@@ -64,6 +64,7 @@ class Config:
             raw = env.get(f.name.upper())
             if raw is None:
                 continue
+            raw = raw.strip()  # a CRLF .env leaves "\r" on every value; a token with it gets a 404
             current = getattr(cfg, f.name)
             if isinstance(current, bool):
                 value = raw.strip().lower() in ("1", "true", "yes", "on")

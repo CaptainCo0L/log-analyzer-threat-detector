@@ -144,6 +144,12 @@ def test_tail_holds_unanswered_until_reply_or_settle_timeout():
     assert tail.feed([mk(7, 0, "UNKNOWN")], now=T0 + 7) == []
 
 
+def test_config_strips_crlf_from_env_values():
+    from pihole_detector.config import Config
+    cfg = Config.from_env({"TELEGRAM_TOKEN": "123:abc\r", "PUSH_ENABLED": "true\r", "POLL_SECONDS": " 2 "})
+    assert cfg.telegram_token == "123:abc" and cfg.push_enabled is True and cfg.poll_seconds == 2.0
+
+
 # sinks ------------------------------------------------------------------------
 def alert(sev="HIGH", rule="ti_match", msg="m", block=None):
     return Alert(time=T0, severity=sev, rule=rule, client="c", domain="d", message=msg,
