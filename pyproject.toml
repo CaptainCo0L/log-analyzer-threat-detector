@@ -1,0 +1,9 @@
+[project]
+name = "pihole-detector"
+version = "0.1.0"
+description = "Real-time DNS threat detection on top of the Pi-hole v6 API"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

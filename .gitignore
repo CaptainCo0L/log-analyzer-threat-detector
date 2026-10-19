@@ -4,5 +4,6 @@ __pycache__/
 .venv/
 venv/
 reports/
+/data/
 .env
 .DS_Store

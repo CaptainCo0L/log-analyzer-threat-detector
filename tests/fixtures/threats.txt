@@ -1,0 +1,2 @@
+# synthetic threat-intel list for replay
+evil-c2.example

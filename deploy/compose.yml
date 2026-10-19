@@ -1,0 +1,42 @@
+# Runs beside Pi-hole on the NAS as its own compose project; the Pi-hole stack is not modified.
+#   cd /mnt/Home/apps/pihole-detector && sudo docker compose -f deploy/compose.yml up -d --build
+name: pihole-detector
+
+services:
+  detector:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: pihole-detector:local
+    container_name: pihole-detector
+    restart: unless-stopped
+    init: true
+    mem_limit: 160m
+    # Pi-hole runs with host networking; reach its API (port 8081) through the host gateway.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - /mnt/Home/apps/pihole/.env   # PIHOLE_PASSWORD only - reused, never copied
+      - ../.env                      # TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PUSH_ENABLED, overrides
+    environment:
+      TZ: Asia/Kolkata
+      PIHOLE_URL: http://host.docker.internal:8081
+      GRAVITY_DB: /pihole/gravity.db
+      STATE_DB: /data/state.db
+      ALERTS_PATH: /data/alerts.jsonl
+    volumes:
+      # The directory, read-only: `pihole -g` replaces gravity.db with a new file, and a
+      # single-file bind mount would keep serving the old inode.
+      - /mnt/Home/apps/pihole/etc-pihole:/pihole:ro
+      - ../data:/data
+    healthcheck:
+      test: ["CMD", "sh", "/hc.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
