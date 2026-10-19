@@ -33,9 +33,10 @@ def new_devices(devices: list[Device], ctx: Context, now: float, quiet: bool) ->
         ctx.state.add_device(dev.hwaddr, now)
         if quiet:
             continue
-        label = dev.name or (dev.ips[0] if dev.ips else dev.hwaddr)
+        label = dev.name or dev.vendor or (dev.ips[0] if dev.ips else dev.hwaddr)
         alerts.append(Alert(
-            time=now, severity=HIGH, rule="new_device", client=f"{label} ({dev.hwaddr})", domain="",
+            time=now, severity=HIGH, rule="new_device", client=label, domain="",
+            address=" · ".join(list(dev.ips[:2]) + [dev.hwaddr]),
             message=f"New device on the LAN: {dev.hwaddr} {dev.vendor or 'unknown vendor'}, "
                     f"IPs {', '.join(dev.ips) or 'none'} (may be a rotated private Wi-Fi MAC)",
             evidence={"hwaddr": dev.hwaddr, "vendor": dev.vendor, "ips": list(dev.ips),
@@ -55,7 +56,8 @@ def silent_devices(ctx: Context, now: float, labels: dict[str, str]) -> list[Ale
             time=now, severity=LOW, rule="device_silent", client=labels.get(ident, ident), domain="",
             message=f"{labels.get(ident, ident)} has sent no DNS to Pi-hole for {hours:.0f} h "
                     "(offline, or bypassing Pi-hole)",
-            evidence={"last_seen": last_seen},
+            evidence={"last_seen": last_seen, "hours": round(hours)},
             dedup=f"device_silent|{ident}",
+            address=ident,
         ))
     return alerts

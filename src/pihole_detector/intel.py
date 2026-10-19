@@ -56,6 +56,7 @@ class GravityIntel:
         self.extra_iot = {c.lower() for c in extra_iot}
         self.threats = DomainSet(self.extra_threats)
         self.iot_clients: set[str] = set(self.extra_iot)
+        self.names: dict[str, str] = {}   # MAC/IP -> the comment on the Pi-hole Clients entry
         self.list_ids: list[int] = []
         self._stamp: tuple[int, float] | None = None
 
@@ -89,6 +90,8 @@ class GravityIntel:
                 'JOIN "group" g ON g.id = cg.group_id WHERE g.name = ?',
                 (self.iot_group,),
             ).fetchall()
+            names = db.execute("SELECT ip, comment FROM client WHERE comment IS NOT NULL AND comment != ''").fetchall()
+        self.names = {ip.lower(): comment.strip() for ip, comment in names}
         self.list_ids = ids
         self.threats = DomainSet(domains + self.extra_threats)
         self.iot_clients = {row[0].lower() for row in clients} | self.extra_iot

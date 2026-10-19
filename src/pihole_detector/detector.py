@@ -38,27 +38,31 @@ class Detector:
         self._last_prune = 0.0
 
     # identity -----------------------------------------------------------------
-    def identify(self, q: Query) -> tuple[str, str]:
+    def identify(self, q: Query) -> tuple[str, str, str]:
+        """(ident, friendly label, address). Label prefers the Pi-hole Clients comment."""
         mac = self.ip_to_mac.get(q.client_ip)
         ident = mac or q.client_ip
-        name = q.client_name if q.client_name and q.client_name != q.client_ip else None
-        label = " ".join(filter(None, [name, f"({q.client_ip}{', ' + mac if mac else ''})"]))
+        hostname = q.client_name if q.client_name and q.client_name != q.client_ip else None
+        names = self.intel.names
+        label = names.get(ident) or names.get(q.client_ip) or hostname or q.client_ip
+        address = " · ".join(filter(None, [q.client_ip, mac]))
         self.labels[ident] = label
-        return ident, label
+        return ident, label, address
 
     # inputs -------------------------------------------------------------------
-    def learn(self, q: Query) -> tuple[str, str, bool]:
+    def learn(self, q: Query) -> tuple[str, str, str, bool]:
         """Update baselines only. Used for every query, and alone for the --seed backfill."""
-        ident, label = self.identify(q)
+        ident, label, address = self.identify(q)
         self.state.touch_client(ident, q.time)
         site = apex(q.domain) if q.domain else ""
         new = self.state.remember_domain(ident, site, q.time) if site else False
-        return ident, label, new
+        return ident, label, address, new
 
     def process_query(self, q: Query) -> list[Alert]:
         self.stats["queries"] += 1
-        ident, label, new = self.learn(q)
-        seen = Seen(ident=ident, label=label, apex=apex(q.domain) if q.domain else "", new_apex=new, now=q.time)
+        ident, label, address, new = self.learn(q)
+        seen = Seen(ident=ident, label=label, apex=apex(q.domain) if q.domain else "", new_apex=new,
+                    now=q.time, address=address)
         alerts: list[Alert] = []
         for rule in self.rules:
             try:
@@ -72,6 +76,7 @@ class Detector:
             if dev.is_real_mac:
                 for ip in dev.ips:
                     self.ip_to_mac[ip] = dev.hwaddr
+                self.labels.setdefault(dev.hwaddr, self.intel.names.get(dev.hwaddr) or dev.name or dev.hwaddr)
         first_run = not self.state.get("devices_seeded", False)
         alerts = new_devices(devices, self.ctx, now, quiet=first_run)
         self.state.put("devices_seeded", True)
@@ -117,7 +122,7 @@ class Detector:
         due = local.tm_hour >= self.cfg.digest_hour and self.state.get("last_digest_day") != today
         if not (due or force):
             return False
-        text = build_digest(self.jsonl.since(last or 0), dict(self.stats))
+        text = build_digest(self.jsonl.since(last or 0), dict(self.stats), start=last or now, end=now)
         self.telegram.send(text, now, capped=False)
         self.state.put("last_digest", now)
         self.state.put("last_digest_day", today)

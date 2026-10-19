@@ -12,7 +12,8 @@ from pathlib import Path
 from .config import Config
 from .detector import Detector
 from .intel import GravityIntel
-from .sinks import JsonlSink, Telegram
+from .model import Alert
+from .sinks import JsonlSink, Telegram, build_digest, format_down, format_push, format_test, format_up
 from .source import ApiError, PiholeApi, Tail, read_replay
 from .state import State
 
@@ -110,7 +111,7 @@ def cmd_run(cfg: Config) -> int:
                 det.process_query(q)
             det.state.put("last_time", tail.mark)
             if failures >= cfg.fail_threshold and cfg.health_push_enabled:
-                det.telegram.send(f"Pi-hole API reachable again after {int(now - down_since)} s.", now, capped=False)
+                det.telegram.send(format_up(now - down_since), now, capped=False)
             failures, down_since = 0, None
         except ApiError as exc:
             failures += 1
@@ -118,9 +119,7 @@ def cmd_run(cfg: Config) -> int:
             down_since = down_since or now
             log.warning("poll failed (%d in a row): %s", failures, exc)
             if failures == cfg.fail_threshold and cfg.health_push_enabled:
-                det.telegram.send(
-                    f"Pi-hole API unreachable ({failures} polls in a row): {exc}. "
-                    "Pi-hole is the LAN's only DNS - check that LAN DNS still resolves.", now, capped=False)
+                det.telegram.send(format_down(failures, str(exc)), now, capped=False)
         det.tick(now)
         det.state.commit()
         # Back off while failing (3, 6, 12, 24, 30 s...) instead of retrying a login every poll.
@@ -143,6 +142,7 @@ def main(argv=None) -> int:
     sp.add_argument("--days", type=float, default=7)
     sub.add_parser("digest", help="send the digest now (tests the Telegram setup)")
     sub.add_parser("test-push", help="send one test Telegram message")
+    sub.add_parser("preview", help="send an example alert and daily report")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -160,11 +160,33 @@ def main(argv=None) -> int:
         return 0
     if args.cmd == "test-push":
         ok = Telegram(cfg.telegram_token, cfg.telegram_chat_id, 1).send(
-            "Pi-hole detector: test message. Pushes are " + ("ON" if cfg.push_enabled else "OFF (shadow mode)"),
-            time.time(), capped=False)
+            format_test(cfg.push_enabled), time.time(), capped=False)
         print("sent" if ok else "FAILED (see log)")
         return 0 if ok else 1
+    if args.cmd == "preview":
+        return cmd_preview(cfg)
     return cmd_run(cfg)
+
+
+def cmd_preview(cfg: Config) -> int:
+    """Send a sample alert and a sample daily report, clearly marked as examples."""
+    tg = Telegram(cfg.telegram_token, cfg.telegram_chat_id, 1)
+    now = time.time()
+    sample = Alert(
+        time=now, severity="HIGH", rule="ti_match", client="Pixel 6 Pro", domain="login.evil-c2.example",
+        address="192.0.2.30 · 02:00:00:00:00:30",
+        message="example", evidence={"matched": "evil-c2.example", "block": "sudo docker exec pihole pihole deny evil-c2.example"},
+    )
+    report = build_digest([
+        {**sample.to_dict()},
+        {"severity": "MEDIUM", "rule": "beaconing", "client": "AswinPC", "domain": "checkin.example",
+         "evidence": {"interval_s": 60}, "time": now},
+        {"severity": "LOW", "rule": "device_silent", "client": "iPad", "evidence": {"hours": 26}, "time": now},
+    ], {"queries": 31204}, start=now - 86400, end=now)
+    ok = all(tg.send("🧪 <i>Example - not a real alert</i>\n\n" + text, now, capped=False)
+             for text in (format_push(sample), report))
+    print("sent" if ok else "FAILED (see log)")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

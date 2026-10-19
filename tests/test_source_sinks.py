@@ -160,7 +160,7 @@ def test_push_cap_mutes_once_then_recovers():
     tg = FakeTelegram(cap=3)
     sent = [tg.send(f"m{i}", T0 + i) for i in range(6)]
     assert sent == [True, True, True, False, False, False]
-    assert len(tg.messages) == 4 and "muted" in tg.messages[3]
+    assert len(tg.messages) == 4 and "Too many alerts" in tg.messages[3]
     assert tg.send("later", T0 + 3601)
     assert tg.messages[-1] == "later"
 
@@ -181,12 +181,34 @@ def test_telegram_failure_is_swallowed():
 
 
 def test_format_push_includes_block_hint():
-    assert "To block: cmd" in format_push(alert(block="cmd"))
+    assert "<code>cmd</code>" in format_push(alert(block="cmd"))
     assert "To block" not in format_push(alert())
+
+
+def test_format_push_escapes_html_and_hides_duplicate_ip():
+    a = Alert(time=T0, severity="MEDIUM", rule="dga_single", client="192.0.2.5", domain="a<b>.example",
+              message="m", address="192.0.2.5 · 02:00:00:00:00:05")
+    text = format_push(a)
+    assert "a&lt;b&gt;.example" in text and "<b>.example" not in text
+    assert "<i>02:00:00:00:00:05</i>" in text
+
+
+def test_html_rejected_falls_back_to_plain_text():
+    calls = []
+
+    def opener(req, timeout=None):
+        body = json.loads(req.data)
+        calls.append(body)
+        if "parse_mode" in body:
+            raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, None)
+        return FakeResp(b"{}")
+    assert Telegram("t", "c", 5, opener=opener).send("<b>hi</b> &amp; bye", T0)
+    assert calls[-1]["text"] == "hi & bye" and "parse_mode" not in calls[-1]
 
 
 def test_digest_lists_medium_low_and_is_sent_even_when_empty():
     text = build_digest([alert("HIGH").to_dict(), alert("MEDIUM", "beaconing", "beacon msg").to_dict()],
                         {"queries": 42})
-    assert "HIGH 1" in text and "MEDIUM 1" in text and "beacon msg" in text and "42" in text
-    assert "Alerts: none" in build_digest([], {})
+    assert "1 high" in text and "1 medium" in text and "Regular check-ins" in text and "42 lookups" in text
+    assert text.index("Malware") < text.index("Regular check-ins")   # HIGH listed first
+    assert "Nothing suspicious" in build_digest([], {})

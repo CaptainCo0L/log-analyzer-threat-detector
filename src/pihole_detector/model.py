@@ -82,6 +82,7 @@ class Alert:
     message: str
     evidence: dict = field(default_factory=dict)
     dedup: str = ""
+    address: str = ""   # "ip · mac" of the client, for messages that show a friendly name
 
     def to_dict(self) -> dict:
         return asdict(self)

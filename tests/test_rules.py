@@ -13,7 +13,7 @@ def test_ti_match_on_subdomain_and_reports_unblocked(make_detector):
     assert a.severity == "HIGH"
     assert "NOT blocked" in a.message
     assert a.evidence["block"] == "sudo docker exec pihole pihole deny evil-c2.example"
-    assert PC_MAC in a.client
+    assert PC_MAC in a.address
 
 
 def test_ti_match_blocked_query_has_no_block_hint(make_detector):
@@ -209,7 +209,7 @@ def test_iot_off_baseline_only_after_learning(make_detector):
     assert det.process_query(q("api.vendor-cloud.example", t=8 * DAY, ip=IOT_IP)) == []
     alerts = det.process_query(q("strange-host.example", t=8 * DAY, ip=IOT_IP))
     assert rules_of(alerts) == ["iot_off_baseline"]
-    assert IOT_MAC in alerts[0].client
+    assert IOT_MAC in alerts[0].address
 
 
 def test_iot_rule_ignores_non_iot_clients(make_detector):
@@ -248,8 +248,8 @@ def test_high_alerts_pushed_only_when_enabled(make_detector):
     det = make_detector(push_enabled=True)
     det.process_query(q("evil-c2.example"))
     det.process_query(q("dns.google"))   # MEDIUM: digest only
-    assert len(det.telegram.messages) == 1 and "ti_match" in det.telegram.messages[0]
-    assert "To block:" in det.telegram.messages[0]
+    assert len(det.telegram.messages) == 1 and "Malware / phishing domain" in det.telegram.messages[0]
+    assert "pihole deny evil-c2.example" in det.telegram.messages[0]
 
 
 def test_digest_not_on_first_run_then_once_per_day(make_detector, monkeypatch):
@@ -264,7 +264,7 @@ def test_digest_not_on_first_run_then_once_per_day(make_detector, monkeypatch):
     assert det.maybe_digest(morning + 3600) is False             # 11:00, day one already counted
     assert det.maybe_digest(morning + 22 * 3600) is False        # 08:00 next day: not yet
     assert det.maybe_digest(morning + 23 * 3600) is True         # 09:00 next day
-    assert "doh_bypass" in det.telegram.messages[-1]
+    assert "Encrypted DNS in use" in det.telegram.messages[-1]
     assert det.maybe_digest(morning + 24 * 3600) is False        # same day again
 
 
@@ -273,3 +273,12 @@ def test_every_alert_written_to_jsonl(make_detector):
     det.process_query(q("evil-c2.example"))
     det.process_query(q("dns.google", t=1))
     assert [r["rule"] for r in det.jsonl.since(0)] == ["ti_match", "doh_bypass"]
+
+
+def test_label_uses_pihole_client_comment(make_detector):
+    det = make_detector()
+    det.intel.names = {PC_MAC: "AswinPC"}
+    a = det.process_query(q("evil-c2.example"))[0]
+    assert a.client == "AswinPC" and a.address == f"{PC_IP} · {PC_MAC}"
+    unnamed = det.process_query(q("evil-c2.example", ip="192.0.2.77"))[0]
+    assert unnamed.client == "192.0.2.77"

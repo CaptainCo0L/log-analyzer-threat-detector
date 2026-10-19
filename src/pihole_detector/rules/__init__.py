@@ -31,10 +31,11 @@ class Context:
 @dataclass(frozen=True)
 class Seen:
     ident: str          # MAC if known, else IP
-    label: str          # human label for messages: "name (ip, mac)"
+    label: str          # friendly name (Pi-hole client comment / hostname), else the IP
     apex: str
     new_apex: bool      # first time this client asked for this apex
     now: float
+    address: str = ""   # "ip · mac"
 
 
 def block_hint(domain: str) -> str:
@@ -54,6 +55,7 @@ def make_alert(
         message=message,
         evidence=evidence,
         dedup=f"{rule}|{seen.ident}" + ("" if per_client else f"|{seen.apex}"),
+        address=seen.address,
     )
 
 
