@@ -123,7 +123,8 @@ def cmd_run(cfg: Config) -> int:
                     "Pi-hole is the LAN's only DNS - check that LAN DNS still resolves.", now, capped=False)
         det.tick(now)
         det.state.commit()
-        time.sleep(cfg.poll_seconds)
+        # Back off while failing (3, 6, 12, 24, 30 s...) instead of retrying a login every poll.
+        time.sleep(min(cfg.poll_seconds * 2 ** min(failures, 4), 30) if failures else cfg.poll_seconds)
 
     log.info("stopping")
     api.logout()
