@@ -1,4 +1,4 @@
-"""CLI: `python -m pihole_detector run | replay FILE | seed | digest`."""
+"""CLI: `python -m pihole_detector run | replay FILE | seed | digest | report`."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from .config import Config
 from .detector import Detector
 from .intel import GravityIntel
 from .model import Alert
+from .report import build_report, load_records
 from .sinks import JsonlSink, Telegram, build_digest, format_down, format_push, format_test, format_up
 from .source import ApiError, PiholeApi, Tail, read_replay
 from .state import State
@@ -143,6 +144,9 @@ def main(argv=None) -> int:
     sub.add_parser("digest", help="send the digest now (tests the Telegram setup)")
     sub.add_parser("test-push", help="send one test Telegram message")
     sub.add_parser("preview", help="send an example alert and daily report")
+    rep = sub.add_parser("report", help="print a Markdown review of alerts.jsonl")
+    rep.add_argument("--days", type=float, default=7)
+    rep.add_argument("--file", help="alerts file (default: ALERTS_PATH)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -165,7 +169,27 @@ def main(argv=None) -> int:
         return 0 if ok else 1
     if args.cmd == "preview":
         return cmd_preview(cfg)
+    if args.cmd == "report":
+        return cmd_report(cfg, args.file, args.days)
     return cmd_run(cfg)
+
+
+def cmd_report(cfg: Config, file: str | None, days: float) -> int:
+    """Print the shadow-week review. Reads the alerts file only; sends nothing."""
+    path = Path(file or cfg.alerts_path)
+    end = time.time()
+    start = end - days * 86400
+    if path.exists():
+        records, skipped = load_records(path, start, end)
+    elif file:
+        print(f"no such alerts file: {path}", file=sys.stderr)
+        return 1
+    else:
+        records, skipped = [], 0
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")  # the report uses arrows and dots a legacy console can't encode
+    print(build_report(records, start, end, push_cap=cfg.push_cap_per_hour, skipped=skipped), end="")
+    return 0
 
 
 def cmd_preview(cfg: Config) -> int:

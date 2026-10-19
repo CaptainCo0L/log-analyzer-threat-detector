@@ -75,6 +75,7 @@ python -m pihole_detector seed --days 7 # backfill baselines from FTL history (n
 python -m pihole_detector replay FILE   # run a JSONL fixture through the pipeline
 python -m pihole_detector test-push     # send one Telegram test message
 python -m pihole_detector digest        # send the digest now
+python -m pihole_detector report        # Markdown review of alerts.jsonl (--days 7, --file PATH); sends nothing
 ```
 
 All settings are environment variables named after the fields in
