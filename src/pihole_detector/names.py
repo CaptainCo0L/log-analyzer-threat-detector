@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 
-SOURCES = ("mDNS", "SSDP", "NetBIOS")  # best first
+SOURCES = ("mDNS", "Bonjour", "SSDP", "NetBIOS")  # best first
 COMMENT = "Clients comment"
 
 

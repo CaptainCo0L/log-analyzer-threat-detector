@@ -179,3 +179,34 @@ def test_discover_groups_answers_by_ip_and_source():
     ssdp_port = udp_responder(lambda _req: None)
     found = discover([LO], wait=1, ports={"mdns": mdns_port, "netbios": nb_port, "ssdp": ssdp_port})
     assert found == {LO: {"mDNS": "pc", "NetBIOS": "PC-NAME"}}
+
+
+# --- Bonjour browse: multicast service queries, names read from the instance labels -------------
+
+from pihole_detector.discovery import instance_name, probe_bonjour
+
+
+def test_instance_name_is_the_label_before_the_service_type():
+    assert instance_name("Aswin's iPhone._companion-link._tcp.local") == "Aswin's iPhone"
+    assert instance_name("_services._dns-sd._udp.local") is None
+    assert instance_name("Aswins-iPad.local") is None
+
+
+def test_bonjour_probe_reads_the_device_name_from_the_service_instance():
+    port = udp_responder(lambda _req: dns_response(
+        [(enc("_companion-link._tcp.local"), 12, enc("Aswin's iPhone._companion-link._tcp.local"))]))
+    assert probe_bonjour([LO], wait=1, port=port, group=LO) == {LO: "Aswin's iPhone"}
+
+
+def test_bonjour_probe_ignores_replies_from_devices_we_did_not_ask_about():
+    port = udp_responder(lambda _req: dns_response(
+        [(enc("_airplay._tcp.local"), 12, enc("Stranger._airplay._tcp.local"))]))
+    assert probe_bonjour(["192.0.2.1"], wait=0.5, port=port, group=LO) == {}
+
+
+def test_bonjour_prefers_the_more_personal_service():
+    # A companion-link instance (the device's own name) beats a generic one from the same device.
+    answers = [(enc("_smb._tcp.local"), 12, enc("FILES._smb._tcp.local")),
+               (enc("_companion-link._tcp.local"), 12, enc("Aswin's iPad._companion-link._tcp.local"))]
+    port = udp_responder(lambda _req: dns_response(answers))
+    assert probe_bonjour([LO], wait=1, port=port, group=LO) == {LO: "Aswin's iPad"}

@@ -196,6 +196,7 @@ def discover(ips, wait, ports=None, fetch=_http_get) -> dict[str, dict[str, str]
     ports = {**DEFAULT_PORTS, **(ports or {})}
     probes = {
         "mDNS": lambda: probe_mdns(ips, wait, ports["mdns"]),
+        "Bonjour": lambda: probe_bonjour(ips, wait, ports["mdns"]),
         "SSDP": lambda: probe_ssdp(ips, wait, ports["ssdp"], fetch),
         "NetBIOS": lambda: probe_netbios(ips, wait, ports["netbios"]),
     }
@@ -211,3 +212,51 @@ def discover(ips, wait, ports=None, fetch=_http_get) -> dict[str, dict[str, str]
     for t in threads:
         t.join()
     return results
+
+
+# Service types that carry a device-level name, most personal first.
+BONJOUR_SERVICES = ("_companion-link._tcp.local", "_airplay._tcp.local", "_googlecast._tcp.local",
+                    "_hap._tcp.local", "_device-info._tcp.local", "_workstation._tcp.local", "_smb._tcp.local")
+
+
+def instance_name(target: str) -> str | None:
+    """"Aswin's iPhone" from "Aswin's iPhone._companion-link._tcp.local"; None for anything else."""
+    label, sep, _rest = target.partition("._")
+    return label if sep and label and not label.startswith("_") else None
+
+
+def _service_rank(target: str) -> int:
+    return next((i for i, service in enumerate(BONJOUR_SERVICES) if target.lower().endswith("." + service)),
+                len(BONJOUR_SERVICES))
+
+
+def probe_bonjour(ips, wait, port=DEFAULT_PORTS["mdns"], group="224.0.0.251") -> dict[str, str]:
+    """Multicast a query per service type; devices answer with an instance name such as their own
+    device name. Replies are matched to the ips we were asked about and everything else is ignored."""
+    wanted = set(ips)
+    best: dict[str, tuple[int, str]] = {}
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        for service in BONJOUR_SERVICES:
+            try:
+                sock.sendto(build_ptr_query(service), (group, port))
+            except OSError:
+                continue
+        deadline = time.monotonic() + wait
+        while (left := deadline - time.monotonic()) > 0:
+            sock.settimeout(left)
+            try:
+                data, addr = sock.recvfrom(4096)
+            except TimeoutError:
+                break
+            except ConnectionResetError:
+                continue
+            except OSError:
+                break
+            if addr[0] not in wanted:
+                continue
+            for target in parse_ptr_targets(data):
+                name = instance_name(target)
+                if name and (addr[0] not in best or _service_rank(target) < best[addr[0]][0]):
+                    best[addr[0]] = (_service_rank(target), name)
+    return {ip: name for ip, (_rank, name) in best.items()}

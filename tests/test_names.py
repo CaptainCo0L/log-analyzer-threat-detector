@@ -129,3 +129,11 @@ def test_cmd_names_probes_only_ipv4_of_real_devices_and_logs_out(tmp_path, capsy
     assert probed == {"ips": ["192.0.2.10", "192.0.2.11"], "wait": 3}
     assert "AswinPC" in out and f"{B}  tv" in out
     assert api.logged_out
+
+
+def test_bonjour_sits_between_mdns_and_ssdp():
+    found = {"192.0.2.10": {"Bonjour": "Aswin's iPad", "SSDP": "UPNP", "NetBIOS": "NB"},
+             "192.0.2.11": {"mDNS": "ipad", "Bonjour": "Aswin's iPad"}}
+    table = rows(build_names_report([dev(A, "192.0.2.10"), dev(B, "192.0.2.11")], {}, found))
+    assert table["192.0.2.10"][1:3] == ["Aswin's iPad", "Bonjour"]
+    assert table["192.0.2.11"][1:3] == ["ipad", "mDNS"]
