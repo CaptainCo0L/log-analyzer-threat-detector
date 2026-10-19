@@ -11,8 +11,10 @@ from pathlib import Path
 
 from .config import Config
 from .detector import Detector
-from .intel import GravityIntel
+from .discovery import discover
+from .intel import GravityIntel, read_client_comments
 from .model import Alert
+from .names import build_names_report, ipv4_of
 from .report import build_report, load_records
 from .sinks import JsonlSink, Telegram, build_digest, format_down, format_push, format_test, format_up
 from .source import ApiError, PiholeApi, Tail, read_replay
@@ -147,6 +149,8 @@ def main(argv=None) -> int:
     rep = sub.add_parser("report", help="print a Markdown review of alerts.jsonl")
     rep.add_argument("--days", type=float, default=7)
     rep.add_argument("--file", help="alerts file (default: ALERTS_PATH)")
+    nm = sub.add_parser("names", help="suggest names for Pi-hole's devices (mDNS/SSDP/NetBIOS); writes nothing")
+    nm.add_argument("--wait", type=float, default=8, help="seconds to listen for replies")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -171,7 +175,28 @@ def main(argv=None) -> int:
         return cmd_preview(cfg)
     if args.cmd == "report":
         return cmd_report(cfg, args.file, args.days)
+    if args.cmd == "names":
+        return cmd_names(cfg, args.wait)
     return cmd_run(cfg)
+
+
+def utf8_stdout() -> None:
+    """The reports use arrows and dots that a legacy console encoding can't print."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
+
+def cmd_names(cfg: Config, wait: float, api=None, probe=discover) -> int:
+    """Suggest names for Pi-hole's devices from mDNS/SSDP/NetBIOS. Reads and probes; writes nothing."""
+    api = api or PiholeApi(cfg.pihole_url, cfg.pihole_password)
+    try:
+        devices = [d for d in api.devices() if d.is_real_mac]
+    finally:
+        api.logout()
+    found = probe([ip for d in devices if (ip := ipv4_of(d))], wait)
+    utf8_stdout()
+    print(build_names_report(devices, read_client_comments(cfg.gravity_db), found), end="")
+    return 0
 
 
 def cmd_report(cfg: Config, file: str | None, days: float) -> int:
@@ -186,8 +211,7 @@ def cmd_report(cfg: Config, file: str | None, days: float) -> int:
         return 1
     else:
         records, skipped = [], 0
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")  # the report uses arrows and dots a legacy console can't encode
+    utf8_stdout()
     print(build_report(records, start, end, push_cap=cfg.push_cap_per_hour, skipped=skipped), end="")
     return 0
 

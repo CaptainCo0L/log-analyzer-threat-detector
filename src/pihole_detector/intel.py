@@ -36,7 +36,17 @@ class DomainSet:
 
 
 def _connect_ro(path: Path) -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    # as_uri() also handles Windows drive letters; a bare f"file:{path}" does not.
+    return sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=5)
+
+
+def read_client_comments(path) -> dict[str, str]:
+    """Pi-hole Clients comments (MAC or IP -> comment). Empty when gravity.db is not there."""
+    if not Path(path).exists():
+        return {}
+    with _connect_ro(Path(path)) as db:
+        rows = db.execute("SELECT ip, comment FROM client WHERE comment IS NOT NULL AND comment != ''").fetchall()
+    return {ip.lower(): comment.strip() for ip, comment in rows if comment.strip()}
 
 
 class GravityIntel:

@@ -76,6 +76,18 @@ python -m pihole_detector replay FILE   # run a JSONL fixture through the pipeli
 python -m pihole_detector test-push     # send one Telegram test message
 python -m pihole_detector digest        # send the digest now
 python -m pihole_detector report        # Markdown review of alerts.jsonl (--days 7, --file PATH); sends nothing
+python -m pihole_detector names         # suggest names for Pi-hole's devices via mDNS/SSDP/NetBIOS (--wait 8); writes nothing
+```
+
+`names` fills the gap left by a router that serves no reverse DNS: it asks each device Pi-hole
+knows about for its own name and prints a table plus a block to paste into Pi-hole's Clients
+comments (the detector already reads those). It never edits Pi-hole. Run it as a one-off
+container on the host network so the probes reach the LAN:
+
+```bash
+sudo docker run --rm --network host --env-file /mnt/Home/apps/pihole/.env \
+  -e PIHOLE_URL=http://127.0.0.1:8081 -e GRAVITY_DB=/pihole/gravity.db \
+  -v /mnt/Home/apps/pihole/etc-pihole:/pihole:ro pihole-detector:local names
 ```
 
 All settings are environment variables named after the fields in
