@@ -47,6 +47,12 @@ because a burst needs 20 *distinct* such names answered NXDOMAIN.
 - `dga_single` ignores NXDOMAIN answers: during a DGA burst every failed name would otherwise
   add its own alert. `nxdomain_burst` covers failed lookups as one alert per client, and the
   name that does resolve is the one worth a MEDIUM.
+- `dga_single` also skips blocked queries (NULL blocking answers `0.0.0.0`, which FTL reports
+  as reply `IP`), apexes in ≥ `SHARED_CLIENTS` (3) clients' baselines, and relationships the
+  baseline already knows (see [Baseline](#baseline)). It still fires while a client is learning,
+  so a cold start cannot hide a DGA. In the first two shadow days 26 of its 30 alerts were three
+  apexes repeating: `3gppnetwork.org` (carrier Wi-Fi calling, `epdg.epc.mncXXX.mccYYY`),
+  `appsflyersdk.com` (app SDK, random per-app prefixes) and `vscode-cdn.net`.
 
 ## Tunneling
 
@@ -62,9 +68,11 @@ The rule fires on ≥10 intervals with a mean between 30 s and 1 h and a coeffic
 three exclusions matter more than the threshold:
 
 1. blocked queries (ad/telemetry SDKs retry blocked names on a timer);
-2. apexes present in more than 2 clients' baselines (OS connectivity checks, NTP);
-3. client→apex relationships older than the learning period (IoT heartbeats to their own
-   cloud). With `seed`, this applies from day one.
+2. apexes present in ≥ `SHARED_CLIENTS` (3) clients' baselines (OS connectivity checks, NTP);
+3. anything but a NEW relationship (see [Baseline](#baseline)), so IoT heartbeats to their own
+   cloud stay quiet. The first version only skipped relationships *older* than the learning
+   period. FTL had history from 10-17 only, so `seed` could not make them that old, and the
+   fridge (hourly to `lgthinq.com`) and WiZ bulb (NTP) alerted all through the first week.
 
 A + AAAA lookups less than 2 s apart count as one event.
 
@@ -75,10 +83,27 @@ A + AAAA lookups less than 2 s apart count as one event.
   hits from **private/rotating Wi-Fi MACs** (iOS, Android, Windows): a known phone that
   rotates its address shows up as "new". That is why this rule may be downgraded after the
   shadow week.
-- `iot_off_baseline`: clients in the Pi-hole group named by `IOT_GROUP` (by MAC). It stays
-  silent until the client has been seen for `LEARNING_DAYS`; every apex seen during learning
-  becomes baseline.
+- `iot_off_baseline`: clients in the Pi-hole group named by `IOT_GROUP` (by MAC). Fires on
+  NEW relationships only (see [Baseline](#baseline)), shared apexes included.
 - `device_silent`: needs ≥50 lifetime queries, alerts once per silence.
+
+## Baseline
+
+`baseline.py` answers one question for `dga_single`, `beaconing` and `iot_off_baseline`: how
+familiar is this client → apex relationship?
+
+- **LEARNING**: the client is younger than `LEARNING_DAYS` (7).
+- **KNOWN**: the apex was first seen during the client's learning week, or the relationship is
+  older than `LEARNING_DAYS`.
+- **NEW**: everything else.
+- **shared** (separate flag): the apex is in ≥ `SHARED_CLIENTS` clients' baselines.
+
+`beaconing` and `iot_off_baseline` need NEW, so a device's first week is unmonitored by them
+(`new_device` covers a device that joins later). `dga_single` fires on LEARNING or NEW.
+
+Replaying the real 10-17 → 10-21 queries (103,965) gave 46 alerts before and 11 after. The
+four HIGH alerts of the 10-19 live attack test, and the four dga_single names worth a look,
+still fire.
 
 ## Known blind spots
 

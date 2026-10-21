@@ -25,8 +25,8 @@ covers all of them. What it cannot see: devices using hard-coded DNS, or DoH/DoT
 | `tunneling` | HIGH | one client sends ≥50 unique subdomains, ≥10 over-long labels or ≥30 TXT/NULL queries under one apex in 10 min |
 | `nxdomain_burst` | HIGH | ≥20 distinct random-looking names answered NXDOMAIN for one client in 5 min (DGA malware searching for its C2) |
 | `new_device` | HIGH | a MAC address appears that has never been seen before |
-| `dga_single` | MEDIUM | a random-looking domain *resolved* |
-| `beaconing` | MEDIUM | a client resolves the same new name at a near-constant interval |
+| `dga_single` | MEDIUM | a random-looking domain *resolved* (not blocked, not shared by 3+ devices, not part of the device's baseline) |
+| `beaconing` | MEDIUM | a client past its learning week resolves the same new name at a near-constant interval |
 | `iot_off_baseline` | MEDIUM | a device in the Pi-hole `IoT` group queries an apex it never used during its 7-day learning period |
 | `doh_bypass` | MEDIUM | a client resolves a public DoH/DoT resolver hostname |
 | `device_silent` | LOW | an active client has sent no queries for 24 h |
@@ -35,7 +35,8 @@ See [docs/detection-notes.md](docs/detection-notes.md) for how each heuristic wa
 
 ## Alert routing
 
-- **Every alert** → `alerts.jsonl`, deduplicated per (rule, client, apex) for 6 h.
+- **Every alert** → `alerts.jsonl`, deduplicated per (rule, client, apex): 6 h for HIGH,
+  7 days for MEDIUM/LOW (`DIGEST_DEDUP_HOURS`), since those only reach the daily digest.
 - **HIGH** → Telegram immediately, capped at 20 per hour (then one "muted" notice).
 - **MEDIUM / LOW** → the daily 09:00 digest. The digest is **always** sent, even when empty, so
   a missing digest means the detector is down.
