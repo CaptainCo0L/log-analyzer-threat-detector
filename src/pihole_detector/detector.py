@@ -6,6 +6,7 @@ import logging
 import time
 from collections import Counter
 
+from .baseline import Baseline
 from .config import Config
 from .discovery import discover
 from .domains import apex
@@ -33,7 +34,8 @@ class Detector:
         self.intel = intel
         self.jsonl = jsonl
         self.telegram = telegram
-        self.ctx = Context(cfg=cfg, state=state, intel=intel, noisy=DomainSet(cfg.noisy_apexes))
+        self.ctx = Context(cfg=cfg, state=state, intel=intel, noisy=DomainSet(cfg.noisy_apexes),
+                           baseline=Baseline(state, cfg))
         self.rules = [ThreatIntelMatch(), DohBypass(), DgaSingle(), NxdomainBurst(),
                       Tunneling(), Beaconing(), IotOffBaseline()]
         self.ip_to_mac: dict[str, str] = {}
@@ -41,6 +43,7 @@ class Detector:
         self.stats: Counter = Counter()
         self.digests = True
         self._last_prune = 0.0
+        self._last_stats = 0.0
 
     # identity -----------------------------------------------------------------
     def display_name(self, mac: str | None, ip: str | None = None) -> str | None:
@@ -59,19 +62,19 @@ class Detector:
         return ident, label, address
 
     # inputs -------------------------------------------------------------------
-    def learn(self, q: Query) -> tuple[str, str, str, bool]:
+    def learn(self, q: Query) -> tuple[str, str, str]:
         """Update baselines only. Used for every query, and alone for the --seed backfill."""
         ident, label, address = self.identify(q)
         self.state.touch_client(ident, q.time)
-        site = apex(q.domain) if q.domain else ""
-        new = self.state.remember_domain(ident, site, q.time) if site else False
-        return ident, label, address, new
+        if q.domain:
+            self.state.remember_domain(ident, apex(q.domain), q.time)
+        return ident, label, address
 
     def process_query(self, q: Query) -> list[Alert]:
         self.stats["queries"] += 1
-        ident, label, address, new = self.learn(q)
-        seen = Seen(ident=ident, label=label, apex=apex(q.domain) if q.domain else "", new_apex=new,
-                    now=q.time, address=address)
+        ident, label, address = self.learn(q)
+        seen = Seen(ident=ident, label=label, apex=apex(q.domain) if q.domain else "", now=q.time,
+                    address=address)
         alerts: list[Alert] = []
         for rule in self.rules:
             try:
@@ -100,6 +103,12 @@ class Detector:
                 rule.prune(now)
             self.state.prune(now)
             alerts = self.emit(silent_devices(self.ctx, now, self.labels))
+        if now - self._last_stats >= 3600:
+            self._last_stats = now
+            # docker logs otherwise show only alerts; this proves polling is alive between them
+            log.info("stats: %d queries, %d HIGH, %d MEDIUM, %d LOW since the last report",
+                     self.stats["queries"], self.stats["alert_HIGH"], self.stats["alert_MEDIUM"],
+                     self.stats["alert_LOW"])
         self.names.reload_if_changed()
         if self.digests:
             self.maybe_discover(now)  # first, so the report below already carries fresh names
@@ -141,7 +150,8 @@ class Detector:
     def emit(self, alerts: list[Alert]) -> list[Alert]:
         out = []
         for alert in alerts:
-            if self.state.suppress(alert.dedup, alert.time, self.cfg.dedup_hours * 3600):
+            hours = self.cfg.dedup_hours if alert.severity == HIGH else self.cfg.digest_dedup_hours
+            if self.state.suppress(alert.dedup, alert.time, hours * 3600):
                 continue
             out.append(alert)
             self.stats[f"alert_{alert.severity}"] += 1
@@ -166,7 +176,9 @@ class Detector:
             return False
         records = relabel(self.jsonl.since(last or 0), lambda mac: self.display_name(mac))
         text = build_digest(records, dict(self.stats), start=last or now, end=now)
-        self.telegram.send(text, now, capped=False)
+        sent = self.telegram.send(text, now, capped=False)
+        # The digest doubles as the heartbeat, so leave a trace of it either way.
+        log.info("digest %s: %d alert(s)", "sent" if sent else "NOT sent", len(records))
         self.state.put("last_digest", now)
         self.state.put("last_digest_day", today)
         self.stats.clear()

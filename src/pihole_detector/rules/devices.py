@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
+from ..baseline import NEW
 from ..model import HIGH, LOW, MEDIUM, Alert, Device, Query
 from . import Context, QueryRule, Seen, block_hint, make_alert
 
 
 class IotOffBaseline(QueryRule):
-    """An IoT-group device asks for an apex it never used during its learning period."""
+    """An IoT-group device asks for an apex it never used during its learning period.
+
+    Shared apexes still count: a camera reaching a site the PCs use is still off its baseline.
+    """
 
     name = "iot_off_baseline"
 
     def on_query(self, q: Query, seen: Seen, ctx: Context):
-        if not seen.new_apex or seen.ident not in ctx.intel.iot_clients or ctx.noisy.match(q.domain):
+        if seen.ident not in ctx.intel.iot_clients or ctx.noisy.match(q.domain):
             return []
-        first = ctx.state.client_first_seen(seen.ident)
-        if first is None or seen.now - first < ctx.cfg.learning_days * 86400:
-            return []  # still learning
+        if ctx.baseline.familiarity(seen.ident, seen.apex, seen.now).stage != NEW:
+            return []
         return [make_alert(
             MEDIUM, self.name, seen, q.domain,
             f"IoT device {seen.label} queried {seen.apex} for the first time (outside its baseline)",

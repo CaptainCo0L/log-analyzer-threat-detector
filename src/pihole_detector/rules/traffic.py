@@ -5,6 +5,7 @@ from __future__ import annotations
 import statistics
 from collections import defaultdict, deque
 
+from ..baseline import NEW
 from ..domains import subdomain_part
 from ..model import HIGH, MEDIUM, Query
 from . import BLOCKED_STATUSES, Context, QueryRule, Seen, make_alert
@@ -80,13 +81,13 @@ class Beaconing(QueryRule):
     """The same client resolves the same name at a near-constant interval (malware check-ins).
 
     Skipped, because they are periodic too and would otherwise dominate: blocked queries
-    (ad/telemetry retries), names many clients use (OS connectivity checks), and apexes the
-    client has used for longer than the learning period (IoT heartbeats to their vendor cloud).
+    (ad/telemetry retries), names many clients use (OS connectivity checks), and anything but a
+    NEW relationship. That keeps IoT heartbeats to their vendor cloud quiet even during the
+    client's own learning week, where every live beaconing alert of the first deploy came from.
     """
 
     name = "beaconing"
     collapse_seconds = 2.0  # A + AAAA (and retries) for one lookup arrive together
-    max_prevalence = 2      # skip apexes in more than this many clients' baselines
 
     def __init__(self):
         self.times: dict[tuple[str, str], deque] = {}
@@ -111,10 +112,8 @@ class Beaconing(QueryRule):
         cv = statistics.pstdev(gaps) / mean
         if cv > cfg.beacon_max_cv:
             return []
-        if ctx.state.apex_prevalence(seen.apex) > self.max_prevalence:
-            return []
-        first = ctx.state.domain_first_seen(seen.ident, seen.apex)
-        if first is not None and seen.now - first >= cfg.learning_days * 86400:
+        fam = ctx.baseline.familiarity(seen.ident, seen.apex, seen.now)
+        if fam.shared or fam.stage != NEW:
             return []
         return [make_alert(
             MEDIUM, self.name, seen, q.domain,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..baseline import Baseline
 from ..config import Config
 from ..intel import DomainSet, GravityIntel
 from ..model import Alert, Query
@@ -26,6 +27,7 @@ class Context:
     state: State
     intel: GravityIntel
     noisy: DomainSet
+    baseline: Baseline
 
 
 @dataclass(frozen=True)
@@ -33,7 +35,6 @@ class Seen:
     ident: str          # MAC if known, else IP
     label: str          # friendly name (Pi-hole client comment / hostname), else the IP
     apex: str
-    new_apex: bool      # first time this client asked for this apex
     now: float
     address: str = ""   # "ip · mac"
 

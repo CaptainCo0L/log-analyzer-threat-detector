@@ -42,9 +42,11 @@ class Config:
     devices_seconds: float = 60.0
     intel_seconds: float = 600.0
     fail_threshold: int = 3
-    dedup_hours: float = 6.0
+    dedup_hours: float = 6.0                # HIGH: pushed again if it is still happening after this
+    digest_dedup_hours: float = 168.0       # MEDIUM/LOW only reach the daily digest; once a week is enough
     push_cap_per_hour: int = 20
     learning_days: float = 7.0
+    shared_clients: int = 3                 # an apex in this many clients' baselines is infrastructure
     nxdomain_window: float = 300.0
     nxdomain_threshold: int = 20
     tunnel_window: float = 600.0

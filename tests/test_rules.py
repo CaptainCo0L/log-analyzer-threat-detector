@@ -39,6 +39,14 @@ def test_ti_alert_deduplicated_then_reopens_after_window(make_detector):
     assert det.process_query(q("evil-c2.example", t=6 * 3600 + 1))
 
 
+def test_digest_only_alerts_deduplicated_for_a_week(make_detector):
+    # MEDIUM/LOW reach a human once a day, so a 6 h window just repeats them in the digest.
+    det = make_detector(dedup_hours=6, digest_dedup_hours=168)
+    assert det.process_query(q("dns.google", t=0))
+    assert det.process_query(q("dns.google", t=2 * DAY)) == []
+    assert det.process_query(q("dns.google", t=7 * DAY + 1))
+
+
 # doh_bypass -------------------------------------------------------------------
 def test_doh_bypass(make_detector):
     det = make_detector()
@@ -66,6 +74,31 @@ def test_dga_single_needs_a_positive_answer(make_detector):
     assert det.process_query(q("www.xkqjzvbwptrm.com", reply="UNKNOWN")) == []
     assert det.process_query(q("www.xkqjzvbwptrm.com", reply="NXDOMAIN")) == []
     assert rules_of(det.process_query(q("www.xkqjzvbwptrm.com", reply="CNAME"))) == ["dga_single"]
+
+
+def test_dga_single_ignores_blocked_queries(make_detector):
+    # NULL blocking answers 0.0.0.0, which FTL reports as reply IP: blocked, not resolved.
+    det = make_detector()
+    assert det.process_query(q("fp.xkqjzvbwptrm.com", status="GRAVITY", reply="IP")) == []
+
+
+def test_dga_single_ignores_apexes_many_clients_use(make_detector):
+    det = make_detector(shared_clients=3)
+    for ip in ("192.0.2.31", "192.0.2.32"):
+        det.process_query(q("www.xkqjzvbwptrm.com", ip=ip))
+    assert det.process_query(q("www.xkqjzvbwptrm.com", t=1)) == []   # third client: carrier/SDK infra
+
+
+def test_dga_single_ignores_long_established_relationship(make_detector):
+    det = make_detector(learning_days=7)
+    det.process_query(q("www.xkqjzvbwptrm.com", t=0))
+    assert det.process_query(q("www.xkqjzvbwptrm.com", t=8 * DAY)) == []
+
+
+def test_dga_single_still_fires_while_the_client_is_learning(make_detector):
+    det = make_detector(learning_days=7)
+    det.process_query(q("example.com", t=0))
+    assert rules_of(det.process_query(q("c.xkqjzvbwptrm.online", t=3 * DAY))) == ["dga_single"]
 
 
 # nxdomain_burst ---------------------------------------------------------------
@@ -150,7 +183,9 @@ def test_tunneling_window_expires(make_detector):
 
 
 # beaconing --------------------------------------------------------------------
-def beacon(det, n, interval, jitter=(), domain="checkin.c2.example", start=0.0, **kw):
+def beacon(det, n, interval, jitter=(), domain="checkin.c2.example", start=8 * DAY, **kw):
+    """Beacon from a client already past its learning week (it first appears at t=0)."""
+    det.process_query(q("warmup.example", t=0, ip=kw.get("ip", PC_IP)))
     out = []
     for i in range(n):
         offset = jitter[i % len(jitter)] if jitter else 0
@@ -178,10 +213,11 @@ def test_beaconing_ignores_jittery_blocked_and_too_fast(make_detector):
 
 def test_beaconing_collapses_a_aaaa_pairs(make_detector):
     det = make_detector(beacon_min_hits=10)
+    det.process_query(q("warmup.example", t=0))
     out = []
     for i in range(11):
-        out += det.process_query(q("pair.c2.example", t=i * 60))
-        out += det.process_query(q("pair.c2.example", t=i * 60 + 0.01, qtype="AAAA"))
+        out += det.process_query(q("pair.c2.example", t=8 * DAY + i * 60))
+        out += det.process_query(q("pair.c2.example", t=8 * DAY + i * 60 + 0.01, qtype="AAAA"))
     assert rules_of(out).count("beaconing") == 1
 
 
@@ -189,7 +225,7 @@ def test_beaconing_skips_widely_used_domains(make_detector):
     det = make_detector(beacon_min_hits=10)
     for n, ip in enumerate(["192.0.2.31", "192.0.2.32", "192.0.2.33"]):
         det.process_query(q("connectivity.example", t=n, ip=ip))
-    assert beacon(det, 12, 60.0, domain="connectivity.example", start=10) == []
+    assert beacon(det, 12, 60.0, domain="connectivity.example", start=8 * DAY + 10) == []
 
 
 def test_beaconing_skips_long_established_relationship(make_detector):
@@ -197,6 +233,14 @@ def test_beaconing_skips_long_established_relationship(make_detector):
     det.process_query(q("mqtt.vendor-cloud.example", t=0, ip=IOT_IP))
     assert beacon(det, 12, 60.0, domain="mqtt.vendor-cloud.example", start=8 * DAY, ip=IOT_IP) == []
     assert len(beacon(det, 12, 60.0, domain="new.c2.example", start=8 * DAY, ip=IOT_IP)) == 1
+
+
+def test_beaconing_quiet_during_the_clients_learning_week(make_detector):
+    # Live cold start: the fridge's hourly vendor heartbeat alerted until its first week was over.
+    det = make_detector(beacon_min_hits=10, learning_days=7)
+    assert [a for a in (det.process_query(q("hb.vendor.example", t=i * 3600, ip=IOT_IP)) for i in range(15))
+            if a] == []
+    assert beacon(det, 12, 3500.0, domain="hb.vendor.example", start=8 * DAY, ip=IOT_IP) == []
 
 
 # iot_off_baseline -----------------------------------------------------------------
@@ -266,6 +310,19 @@ def test_digest_not_on_first_run_then_once_per_day(make_detector, monkeypatch):
     assert det.maybe_digest(morning + 23 * 3600) is True         # 09:00 next day
     assert "Encrypted DNS in use" in det.telegram.messages[-1]
     assert det.maybe_digest(morning + 24 * 3600) is False        # same day again
+
+
+def test_digest_and_hourly_stats_are_logged(make_detector, monkeypatch, caplog):
+    import logging
+    import time as _time
+    monkeypatch.setattr(_time, "localtime", _time.gmtime)
+    caplog.set_level(logging.INFO, logger="pihole_detector")
+    det = make_detector(digest_hour=9)
+    det.process_query(q("example.com"))
+    det.tick(T0 + 3600)
+    assert "stats: 1 queries" in caplog.text
+    det.maybe_digest(T0 + 3600, force=True)
+    assert "digest sent" in caplog.text
 
 
 def test_every_alert_written_to_jsonl(make_detector):
