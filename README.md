@@ -58,6 +58,17 @@ your private chat: an update counts only when both its chat and its sender are `
 | `/devices [all]` | Devices that queried in the last 15 min, with name, IP and Pi-hole groups |
 | `/whois <name, IP or MAC>` | One device: MAC, name source, groups, top 10 domains of the last 24 h, last 5 alerts |
 
+Pushed alerts carry buttons:
+- **🛡 Block `<apex>`** (only when the domain resolved) adds a Pi-hole regex deny for the apex and every
+  subdomain, for everyone (Default group), the same thing `pihole --wild` does.
+- **🔕 Mute 24 h / 7 d** silences that rule for that device. The alerts are still logged and still in the daily report.
+- **📋 Copy block command** copies the NAS command, for when the bot isn't running.
+
+Every button reply has **↩️ Undo**. The rotation-sync message has Undo too: it reverses that change,
+but only while it is the device's newest one (the same rule as `clients-undo`). The daily report has
+**📄 Full report**. `python -m pihole_detector preview` sends a sample alert with working buttons; its
+domain is under `.example`, which never resolves, so trying Block on it is harmless.
+
 Buttons work once and expire after a day. `/whois` shows domain *counts* only, never the raw query
 log, because bot chats are not end-to-end encrypted.
 

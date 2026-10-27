@@ -75,7 +75,8 @@ def detail(alert: Alert) -> str:
     return ""
 
 
-def format_push(alert: Alert) -> str:
+def format_push(alert: Alert, hint: bool = True) -> str:
+    """The pushed alert. `hint=False` drops the "run on the NAS" block command, for when buttons carry it."""
     title, meaning = RULES.get(alert.rule, (alert.rule, ""))
     lines = [f"{SEVERITY_ICON.get(alert.severity, '⚪')} <b>{esc(title)}</b>", ""]
     device = f"📱 <b>{esc(alert.client)}</b>"
@@ -91,7 +92,7 @@ def format_push(alert: Alert) -> str:
     if meaning:
         lines += ["", f"💡 {esc(meaning)}"]
     block = (alert.evidence or {}).get("block")
-    if block:
+    if block and hint:
         lines += ["", "🛡 To block it, run on the NAS:", f"<code>{esc(block)}</code>"]
     lines += ["", f"<i>{esc(when(alert.time))} · {esc(alert.severity)} · {esc(alert.rule)}</i>"]
     return "\n".join(lines)

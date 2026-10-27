@@ -12,7 +12,7 @@ def test_ti_match_on_subdomain_and_reports_unblocked(make_detector):
     a = alerts[0]
     assert a.severity == "HIGH"
     assert "NOT blocked" in a.message
-    assert a.evidence["block"] == "sudo docker exec pihole pihole deny evil-c2.example"
+    assert a.evidence["block"] == "sudo docker exec pihole pihole --wild evil-c2.example"
     assert PC_MAC in a.address
 
 
@@ -340,7 +340,7 @@ def test_high_alerts_pushed_only_when_enabled(make_detector):
     det.process_query(q("evil-c2.example"))
     det.process_query(q("dns.google"))   # MEDIUM: digest only
     assert len(det.telegram.messages) == 1 and "Malware / phishing domain" in det.telegram.messages[0]
-    assert "pihole deny evil-c2.example" in det.telegram.messages[0]
+    assert "pihole --wild evil-c2.example" in det.telegram.messages[0]
 
 
 def test_digest_not_on_first_run_then_once_per_day(make_detector, monkeypatch):

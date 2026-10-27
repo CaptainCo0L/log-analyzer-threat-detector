@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import signal
 import sys
 import time
 from pathlib import Path
 
-from .bot import drain, start_bot
+from . import clientlog
+from .bot import alert_buttons, drain, start_bot
 from .config import Config
+from .rules import block_hint
 from .detector import Detector
 from .discovery import discover, nmap_options
 from .intel import GravityIntel, read_client_comments
@@ -19,7 +20,6 @@ from .model import Alert
 from .namestore import NameStore, best_probe, relabel
 from .names import build_names_report, ipv4_of
 from .report import build_report, load_records
-from .rotation import Client
 from .sinks import JsonlSink, Telegram, build_digest, format_down, format_push, format_test, format_up
 from .source import ApiError, PiholeApi, Tail, read_replay
 from .state import State
@@ -221,24 +221,16 @@ def cmd_names(cfg: Config, wait: float, api=None, probe=discover, save: bool = F
 
 def cmd_clients_undo(cfg: Config, api=None) -> int:
     """Reverse the newest rotation sync not yet undone: remove the MAC it added, re-add those it removed."""
-    path = Path(cfg.client_changes_path)
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    records = [json.loads(line) for line in lines if line.strip()]
-    undone = {r["undo_of"] for r in records if "undo_of" in r}
-    change = next((r for r in reversed(records) if "added" in r and r["time"] not in undone), None)
+    change, why_not = clientlog.pick(clientlog.read(cfg.client_changes_path))
     if not change:
-        print("nothing to undo")
+        print(why_not)
         return 1
     api = api or PiholeApi(cfg.pihole_url, cfg.pihole_password)
     try:
-        api.delete_client(change["added"]["client"])
-        for entry in change["deleted"]:
-            api.add_client(Client(**{**entry, "groups": tuple(entry["groups"])}))
+        clientlog.undo(change, api, cfg.client_changes_path, time.time())
     finally:
         if hasattr(api, "logout"):
             api.logout()
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"time": time.time(), "undo_of": change["time"]}) + "\n")
     print(f"undone: removed {change['added']['mac']}, restored "
           f"{', '.join(e['mac'] for e in change['deleted']) or 'nothing'} ({change['name']})")
     return 0
@@ -264,23 +256,33 @@ def cmd_report(cfg: Config, file: str | None, days: float) -> int:
     return 0
 
 
-def cmd_preview(cfg: Config) -> int:
-    """Send a sample alert and a sample daily report, clearly marked as examples."""
-    tg = Telegram(cfg.telegram_token, cfg.telegram_chat_id, 1)
+def cmd_preview(cfg: Config, tg=None, state=None) -> int:
+    """Send a sample alert and a sample daily report, clearly marked as examples. With the bot on, the
+    sample carries real buttons (its domain is under .example, which never resolves, so Block is harmless)."""
+    tg = tg or Telegram(cfg.telegram_token, cfg.telegram_chat_id, 1)
     now = time.time()
     sample = Alert(
         time=now, severity="HIGH", rule="ti_match", client="Pixel 6 Pro", domain="login.evil-c2.example",
-        address="192.0.2.30 · 02:00:00:00:00:30",
-        message="example", evidence={"matched": "evil-c2.example", "block": "sudo docker exec pihole pihole deny evil-c2.example"},
+        address="192.0.2.30 · 02:00:00:00:00:30", dedup="ti_match|example|evil-c2.example",
+        message="example", evidence={"matched": "evil-c2.example", "block": block_hint("evil-c2.example")},
     )
+    buttons = None
+    if cfg.bot_enabled:
+        own = state is None
+        state = state or State(cfg.state_db)
+        buttons = alert_buttons(state, sample, now)
+        state.commit()
+        if own:
+            state.close()
     report = build_digest([
         {**sample.to_dict()},
         {"severity": "MEDIUM", "rule": "beaconing", "client": "AswinPC", "domain": "checkin.example",
          "evidence": {"interval_s": 60}, "time": now},
         {"severity": "LOW", "rule": "device_silent", "client": "iPad", "evidence": {"hours": 26}, "time": now},
     ], {"queries": 31204}, start=now - 86400, end=now)
-    ok = all(tg.send("🧪 <i>Example - not a real alert</i>\n\n" + text, now, capped=False)
-             for text in (format_push(sample), report))
+    banner = "🧪 <i>Example - not a real alert</i>\n\n"
+    ok = tg.send(banner + format_push(sample, hint=not buttons), now, capped=False, buttons=buttons)
+    ok = tg.send(banner + report, now, capped=False) and ok
     print("sent" if ok else "FAILED (see log)")
     return 0 if ok else 1
 

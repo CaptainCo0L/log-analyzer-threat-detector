@@ -23,6 +23,7 @@ from .rules.devices import IotOffBaseline, new_devices, silent_devices
 from .rules.intel_rules import DohBypass, ThreatIntelMatch
 from .rules.randomness import DgaSingle, NxdomainBurst
 from .rules.traffic import Beaconing, Tunneling
+from .bot import action_button, alert_buttons, is_muted
 from .sinks import JsonlSink, Telegram, build_digest, format_push
 from .state import State
 
@@ -217,7 +218,9 @@ class Detector:
             groups = self.clients_api.groups()
         except Exception:
             groups = {}
-        self.telegram.send(format_sync(name, plan.add, deleted, groups, error), now, capped=False)
+        undo = ([[action_button(self.state, "↩️ Undo", {"kind": "undo_rotation", "time": now}, now)]]
+                if self.cfg.bot_enabled else None)
+        self.telegram.send(format_sync(name, plan.add, deleted, groups, error), now, capped=False, buttons=undo)
 
     # outputs ------------------------------------------------------------------
     def emit(self, alerts: list[Alert]) -> list[Alert]:
@@ -230,8 +233,9 @@ class Detector:
             self.stats[f"alert_{alert.severity}"] += 1
             self.jsonl.write(alert)
             log.info("[%s] %s: %s", alert.severity, alert.rule, alert.message)
-            if alert.severity == HIGH and self.cfg.push_enabled:
-                self.telegram.send(format_push(alert), alert.time)
+            if alert.severity == HIGH and self.cfg.push_enabled and not is_muted(self.state, alert, alert.time):
+                buttons = alert_buttons(self.state, alert, alert.time) if self.cfg.bot_enabled else None
+                self.telegram.send(format_push(alert, hint=not buttons), alert.time, buttons=buttons)
         return out
 
     def maybe_digest(self, now: float, force: bool = False) -> bool:
@@ -249,7 +253,12 @@ class Detector:
             return False
         records = relabel(self.jsonl.since(last or 0), lambda mac: self.display_name(mac))
         text = build_digest(records, dict(self.stats), start=last or now, end=now)
-        sent = self.telegram.send(text, now, capped=False)
+        buttons = None
+        if self.cfg.bot_enabled:
+            days = max(1, round((now - (last or now)) / 86400))
+            buttons = [[action_button(self.state, "📄 Full report",
+                                      {"kind": "full_report", "days": days, "end": now}, now)]]
+        sent = self.telegram.send(text, now, capped=False, buttons=buttons)
         # The digest doubles as the heartbeat, so leave a trace of it either way.
         log.info("digest %s: %d alert(s)", "sent" if sent else "NOT sent", len(records))
         self.state.put("last_digest", now)

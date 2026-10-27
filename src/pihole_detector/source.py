@@ -134,6 +134,14 @@ class PiholeApi:
     def groups(self) -> dict[int, str]:
         return {g["id"]: g["name"] for g in self.get("/groups").get("groups") or []}
 
+    def add_domain(self, list_type: str, kind: str, domain: str, comment: str = "") -> None:
+        """Add to Pi-hole's allow/deny list ("allow"|"deny", "exact"|"regex"), for every client (Default group)."""
+        self._call("POST", f"/domains/{list_type}/{kind}",
+                   body={"domain": domain, "comment": comment, "groups": [0], "enabled": True})
+
+    def delete_domain(self, list_type: str, kind: str, domain: str) -> None:
+        self._call("DELETE", f"/domains/{list_type}/{kind}/" + urllib.parse.quote(domain, safe=""))
+
     def add_client(self, entry: Client) -> None:
         self._call("POST", "/clients", body={"client": entry.client, "comment": entry.comment,
                                              "groups": list(entry.groups)})

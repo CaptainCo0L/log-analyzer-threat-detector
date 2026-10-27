@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from ..baseline import Baseline
 from ..config import Config
+from ..domains import apex
 from ..intel import DomainSet, GravityIntel
 from ..model import Alert, Query
 from ..state import State
@@ -40,7 +41,8 @@ class Seen:
 
 
 def block_hint(domain: str) -> str:
-    return f"sudo docker exec pihole pihole deny {domain}"
+    """The NAS command that blocks the domain's apex and every subdomain (`pihole deny` is exact only)."""
+    return f"sudo docker exec pihole pihole --wild {apex(domain)}"
 
 
 def make_alert(

@@ -15,6 +15,7 @@ import threading
 import time
 from collections import Counter
 
+from . import clientlog
 from .domains import apex
 from .namestore import MAC, mac_from_address, relabel
 from .report import build_report
@@ -35,6 +36,50 @@ WRITE_COMMANDS: set[str] = set()  # commands that change something; refused when
 STALE_SECONDS = 300
 ONLINE_SECONDS = 900
 MAX_REPORT_DAYS = 30
+
+
+APEX = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
+
+
+def wild_regex(domain: str) -> str:
+    """Pi-hole's regex for a domain and all its subdomains, as `pihole --wild` writes it."""
+    return r"(\.|^)" + domain.replace(".", r"\.") + "$"
+
+
+def alert_ident(alert) -> str:
+    """The device an alert is about: dedup keys are "rule|ident[|apex]"."""
+    parts = alert.dedup.split("|")
+    return parts[1] if len(parts) > 1 else alert.client
+
+
+def mute_key(rule: str, ident: str) -> str:
+    return f"mute:{rule}|{ident}"
+
+
+def is_muted(state, alert, now: float) -> bool:
+    return (state.get(mute_key(alert.rule, alert_ident(alert))) or 0) > now
+
+
+def action_button(state, label: str, payload: dict, now: float, style: str | None = None) -> dict:
+    btn = {"text": label, "callback_data": f"a:{state.add_action(payload, now)}"}
+    if style:
+        btn["style"] = style
+    return btn
+
+
+def alert_buttons(state, alert, now: float) -> list[list[dict]]:
+    """Block (when the domain resolved), mute this rule for this device, and the NAS command to copy."""
+    rows = []
+    command = (alert.evidence or {}).get("block")
+    target = command.rsplit(" ", 1)[-1] if command else ""
+    if APEX.fullmatch(target):
+        rows.append([action_button(state, f"🛡 Block {target}", {"kind": "block", "domain": target}, now, "danger")])
+    mute = {"kind": "mute", "rule": alert.rule, "ident": alert_ident(alert), "label": alert.client}
+    rows.append([action_button(state, "🔕 Mute 24 h", {**mute, "hours": 24}, now),
+                 action_button(state, "🔕 Mute 7 d", {**mute, "hours": 168}, now)])
+    if command and len(command) <= 256:  # copy_text holds 1-256 characters
+        rows.append([{"text": "📋 Copy block command", "copy_text": {"text": command}}])
+    return rows
 
 
 def ago(seconds: float) -> str:
@@ -152,10 +197,62 @@ class Bot:
         return self.telegram.send(text, time.time(), capped=False, buttons=buttons)
 
     def button(self, label: str, payload: dict, now: float, style: str | None = None) -> dict:
-        btn = {"text": label, "callback_data": f"a:{self.det.state.add_action(payload, now)}"}
-        if style:
-            btn["style"] = style
-        return btn
+        return action_button(self.det.state, label, payload, now, style)
+
+    # alert buttons --------------------------------------------------------------------------
+    def press_block(self, payload: dict, now: float) -> str:
+        domain = payload["domain"]
+        try:
+            self.api.add_domain("deny", "regex", wild_regex(domain), comment=f"Telegram, {when(now)}")
+        except Exception as exc:
+            self.reply(f"⚠️ Couldn't block <code>{esc(domain)}</code>: {esc(exc)}")
+            return f"Couldn't block: {exc}"[:200]
+        undo = self.button("↩️ Undo", {"kind": "unblock", "domain": domain}, now)
+        self.reply(f"🛡 Blocked <code>{esc(domain)}</code> and all its subdomains for everyone.", buttons=[[undo]])
+        return "Blocked"
+
+    def press_unblock(self, payload: dict, now: float) -> str:
+        domain = payload["domain"]
+        try:
+            self.api.delete_domain("deny", "regex", wild_regex(domain))
+        except Exception as exc:
+            self.reply(f"⚠️ Couldn't unblock <code>{esc(domain)}</code>: {esc(exc)}")
+            return f"Couldn't unblock: {exc}"[:200]
+        self.reply(f"↩️ Unblocked <code>{esc(domain)}</code>.")
+        return "Unblocked"
+
+    def press_mute(self, payload: dict, now: float) -> str:
+        hours = payload["hours"]
+        self.det.state.put(mute_key(payload["rule"], payload["ident"]), now + hours * 3600)
+        title = RULES.get(payload["rule"], (payload["rule"], ""))[0]
+        span = f"{hours // 24} d" if hours >= 48 else f"{hours} h"
+        undo = self.button("↩️ Undo", {**payload, "kind": "unmute"}, now)
+        self.reply(f"🔕 Muted <b>{esc(title)}</b> for {esc(payload['label'])} for {span}, until "
+                   f"{esc(when(now + hours * 3600))}. Those alerts are still logged and in the daily report.",
+                   buttons=[[undo]])
+        return f"Muted for {span}"
+
+    def press_unmute(self, payload: dict, now: float) -> str:
+        self.det.state.put(mute_key(payload["rule"], payload["ident"]), 0)
+        title = RULES.get(payload["rule"], (payload["rule"], ""))[0]
+        self.reply(f"🔔 Unmuted <b>{esc(title)}</b> for {esc(payload['label'])}.")
+        return "Unmuted"
+
+    def press_undo_rotation(self, payload: dict, now: float) -> str:
+        path = self.det.cfg.client_changes_path
+        change, why_not = clientlog.pick(clientlog.read(path), payload["time"])
+        if not change:
+            self.reply(f"↩️ Not undone: {esc(why_not)}.")
+            return why_not[:200]
+        try:
+            clientlog.undo(change, self.api, path, now)
+        except Exception as exc:
+            self.reply(f"⚠️ Undo failed part-way: {esc(exc)}. Check Pi-hole > Clients.")
+            return "Undo failed"
+        restored = ", ".join(e["mac"] for e in change["deleted"]) or "nothing"
+        self.reply(f"↩️ Undone for {esc(change['name'])}: removed <code>{change['added']['mac']}</code>, "
+                   f"restored {esc(restored)}.")
+        return "Undone"
 
     # /help ----------------------------------------------------------------------------------
     def cmd_help(self, args, now) -> None:
