@@ -88,7 +88,7 @@ class PiholeApi:
 
     # endpoints --------------------------------------------------------------
     def queries_since(self, since: float, until: float | None = None, disk: bool = False,
-                      page: int = 1000) -> list[Query]:
+                      page: int = 1000, filters: dict | None = None) -> list[Query]:
         """All queries with time >= since, oldest first.
 
         FTL returns newest first. Rather than relying on cursor/start semantics, page backwards
@@ -99,6 +99,7 @@ class PiholeApi:
             params["until"] = f"{until:.6f}"
         if disk:
             params["disk"] = "true"
+        params.update(filters or {})  # e.g. {"client_ip": ...}: FTL filters server-side
         found: dict[tuple, Query] = {}
         while True:
             batch = [Query.from_api(item) for item in self.get("/queries", params).get("queries") or []]

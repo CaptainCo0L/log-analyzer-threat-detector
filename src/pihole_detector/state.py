@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 from pathlib import Path
 
@@ -24,7 +25,9 @@ CREATE TABLE IF NOT EXISTS client_domain (
 CREATE INDEX IF NOT EXISTS idx_client_domain_apex ON client_domain (apex);
 CREATE TABLE IF NOT EXISTS device (hwaddr TEXT PRIMARY KEY, first_seen REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS dedup (key TEXT PRIMARY KEY, until REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS action (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created REAL NOT NULL);
 """
+ACTION_TTL = 86400  # a Telegram button works for one day, and once
 
 
 class State:
@@ -110,5 +113,22 @@ class State:
         )
         return False
 
+    # telegram buttons ---------------------------------------------------------
+    def add_action(self, payload: dict, now: float) -> str:
+        """Store what a button does; its callback_data is "a:<id>" (Telegram allows 64 bytes)."""
+        action_id = secrets.token_hex(6)
+        self.db.execute("INSERT INTO action (id, payload, created) VALUES (?, ?, ?)",
+                        (action_id, json.dumps(payload), now))
+        return action_id
+
+    def take_action(self, action_id: str, now: float) -> dict | None:
+        """The button's payload, once: a second press, or one a day later, gets None."""
+        row = self.db.execute("SELECT payload, created FROM action WHERE id = ?", (action_id,)).fetchone()
+        if not row:
+            return None
+        self.db.execute("DELETE FROM action WHERE id = ?", (action_id,))
+        return json.loads(row[0]) if now - row[1] <= ACTION_TTL else None
+
     def prune(self, now: float) -> None:
         self.db.execute("DELETE FROM dedup WHERE until < ?", (now,))
+        self.db.execute("DELETE FROM action WHERE created < ?", (now - ACTION_TTL,))

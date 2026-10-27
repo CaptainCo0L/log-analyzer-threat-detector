@@ -46,6 +46,21 @@ See [docs/detection-notes.md](docs/detection-notes.md) for how each heuristic wa
 New deployments start in **shadow mode** (`PUSH_ENABLED=false`): alerts go only to JSONL and the
 digest, so thresholds can be tuned before anything pings a phone.
 
+### Telegram commands (`BOT_ENABLED=true`)
+
+The bot also answers you. It long-polls Telegram (no webhook, no open port) and replies only in
+your private chat: an update counts only when both its chat and its sender are `TELEGRAM_CHAT_ID`.
+
+| Command | Answer |
+| --- | --- |
+| `/status` | Pi-hole up and blocking, detector uptime, lookups and alerts since the last report |
+| `/report [days]` | Alert summary for 1-30 days (default 7); **📄 Full report** sends it as a `.md` file |
+| `/devices [all]` | Devices that queried in the last 15 min, with name, IP and Pi-hole groups |
+| `/whois <name, IP or MAC>` | One device: MAC, name source, groups, top 10 domains of the last 24 h, last 5 alerts |
+
+Buttons work once and expire after a day. `/whois` shows domain *counts* only, never the raw query
+log, because bot chats are not end-to-end encrypted.
+
 ## Requirements
 
 - Pi-hole v6 (FTL REST API); developed against Pi-hole v6.4 / FTL 6.7.

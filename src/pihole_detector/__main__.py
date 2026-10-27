@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 
+from .bot import drain, start_bot
 from .config import Config
 from .detector import Detector
 from .discovery import discover, nmap_options
@@ -89,6 +90,7 @@ def cmd_run(cfg: Config) -> int:
     det = build(cfg)
     api = PiholeApi(cfg.pihole_url, cfg.pihole_password)
     det.clients_api = api  # used only when ROTATION_SYNC is on
+    bot = start_bot(det, api)
     stopping = False
 
     def stop(*_):
@@ -127,6 +129,8 @@ def cmd_run(cfg: Config) -> int:
             log.warning("poll failed (%d in a row): %s", failures, exc)
             if failures == cfg.fail_threshold and cfg.health_push_enabled:
                 det.telegram.send(format_down(failures, str(exc)), now, capped=False)
+        if bot:
+            drain(bot[1], bot[0], det.state, now)
         det.tick(now)
         det.state.commit()
         # Back off while failing (3, 6, 12, 24, 30 s...) instead of retrying a login every poll.

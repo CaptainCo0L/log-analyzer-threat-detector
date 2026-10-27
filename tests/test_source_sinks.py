@@ -248,3 +248,96 @@ def test_digest_lists_medium_low_and_is_sent_even_when_empty():
     assert "1 high" in text and "1 medium" in text and "Regular check-ins" in text and "42 lookups" in text
     assert text.index("Malware") < text.index("Regular check-ins")   # HIGH listed first
     assert "Nothing suspicious" in build_digest([], {})
+
+
+# --- Bot API transport: buttons, 429, spacing, long polling, documents, command menu -----------
+
+def recorder(results=None, fail=None):
+    """An opener that records (method, payload) and answers {"ok": true, "result": ...}."""
+    calls = []
+
+    def opener(req, timeout=None):
+        method = req.full_url.rsplit("/", 1)[1]
+        is_json = (req.get_header("Content-type") or "").startswith("application/json")
+        calls.append((method, json.loads(req.data) if is_json and req.data else req.data, timeout))
+        if fail:
+            err = fail(method, len(calls))
+            if err:
+                raise err
+        result = (results or {}).get(method, True)
+        return FakeResp(json.dumps({"ok": True, "result": result}).encode())
+    return opener, calls
+
+
+def http_429(retry_after):
+    body = json.dumps({"ok": False, "error_code": 429, "parameters": {"retry_after": retry_after}}).encode()
+    return urllib.error.HTTPError("https://api.telegram.org/x", 429, "Too Many Requests", {}, io.BytesIO(body))
+
+
+def test_send_attaches_inline_buttons():
+    opener, calls = recorder({"sendMessage": {"message_id": 7}})
+    tg = Telegram("t", "42", 5, opener=opener, sleep=lambda s: None)
+    rows = [[{"text": "🛡 Block", "callback_data": "a:1", "style": "danger"}]]
+    assert tg.send("hi", T0, buttons=rows)
+    assert calls[0][1]["reply_markup"] == {"inline_keyboard": rows}
+
+
+def test_flood_control_waits_retry_after_once_then_retries():
+    slept = []
+    opener, calls = recorder(fail=lambda method, n: http_429(3) if n == 1 else None)
+    tg = Telegram("t", "42", 5, opener=opener, sleep=slept.append, clock=lambda: 1000.0)
+    assert tg.send("hi", T0, capped=False)
+    assert len(calls) == 2 and 3 in slept
+
+
+def test_messages_are_spaced_a_second_apart():
+    slept, clock = [], [1000.0]
+    opener, _ = recorder()
+    tg = Telegram("t", "42", 5, opener=opener, sleep=lambda s: slept.append(s) or clock.__setitem__(0, clock[0] + s),
+                  clock=lambda: clock[0])
+    tg.send("a", T0, capped=False)
+    clock[0] += 0.25
+    tg.send("b", T0, capped=False)
+    assert slept == [0.75]
+
+
+def test_get_updates_long_polls_for_messages_and_buttons_only():
+    opener, calls = recorder({"getUpdates": [{"update_id": 5}]})
+    tg = Telegram("t", "42", 5, opener=opener, sleep=lambda s: None)
+    assert tg.get_updates(offset=5, timeout=25) == [{"update_id": 5}]
+    method, payload, timeout = calls[0]
+    assert method == "getUpdates" and payload == {"offset": 5, "timeout": 25,
+                                                   "allowed_updates": ["message", "callback_query"]}
+    assert timeout > 25  # the HTTP timeout outlasts the long poll
+
+
+def test_get_updates_failure_is_an_empty_batch_and_never_logs_the_token(caplog):
+    def boom(req, timeout=None):
+        raise urllib.error.URLError("secret-token in a url")
+    assert Telegram("secret-token", "42", 5, opener=boom, sleep=lambda s: None).get_updates(0, 25) == []
+    assert "secret-token" not in caplog.text
+
+
+def test_send_document_uploads_a_named_file_to_the_chat():
+    opener, calls = recorder()
+    tg = Telegram("t", "42", 5, opener=opener, sleep=lambda s: None)
+    assert tg.send_document("report.md", b"# Review\n", caption="7 days")
+    method, body, _ = calls[0]
+    assert method == "sendDocument"
+    assert b'filename="report.md"' in body and b"# Review" in body and b'name="chat_id"' in body and b"42" in body
+
+
+def test_command_menu_is_registered_for_the_owner_chat_only():
+    opener, calls = recorder()
+    Telegram("t", "42", 5, opener=opener, sleep=lambda s: None).set_commands([("status", "Health")])
+    assert calls[0][1] == {"commands": [{"command": "status", "description": "Health"}],
+                           "scope": {"type": "chat", "chat_id": "42"}}
+
+
+def test_callback_answers_and_edits_are_sent():
+    opener, calls = recorder()
+    tg = Telegram("t", "42", 5, opener=opener, sleep=lambda s: None)
+    tg.answer_callback("cb1", "Done")
+    tg.edit(9, "new text")
+    assert calls[0][:2] == ("answerCallbackQuery", {"callback_query_id": "cb1", "text": "Done"})
+    assert calls[1][0] == "editMessageText" and calls[1][1]["message_id"] == 9 and calls[1][1]["chat_id"] == "42"

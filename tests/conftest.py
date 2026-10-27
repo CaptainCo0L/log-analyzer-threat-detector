@@ -17,13 +17,27 @@ IOT_IP, IOT_MAC = "192.0.2.20", "02:00:00:00:00:20"
 
 
 class FakeTelegram(Telegram):
-    def __init__(self, cap=20):
-        super().__init__("token", "chat", cap)
-        self.messages: list[str] = []
+    """Records every Bot API call instead of sending it. `updates` scripts getUpdates batches."""
 
-    def _post(self, text: str) -> bool:
-        self.messages.append(text)
+    def __init__(self, cap=20, chat_id="42"):
+        super().__init__("token", chat_id, cap, sleep=lambda s: None)
+        self.calls: list[tuple[str, dict, dict | None]] = []
+        self.updates: list[list[dict]] = []
+
+    def _api(self, method, payload=None, files=None, timeout=10):
+        self.calls.append((method, payload or {}, files))
+        if method == "getUpdates":
+            return self.updates.pop(0) if self.updates else []
+        if method == "sendMessage":
+            return {"message_id": len(self.calls)}
         return True
+
+    def payloads(self, method="sendMessage") -> list[dict]:
+        return [payload for m, payload, _ in self.calls if m == method]
+
+    @property
+    def messages(self) -> list[str]:
+        return [payload["text"] for payload in self.payloads()]
 
 
 def q(domain, t=0.0, ip=PC_IP, reply="IP", status="FORWARDED", qtype="A", **kw) -> Query:

@@ -42,6 +42,7 @@ class Config:
     telegram_token: str = field(default="", repr=False)
     telegram_chat_id: str = ""
     push_enabled: bool = False              # shadow mode by default
+    bot_enabled: bool = False               # answer the owner's commands and button presses
     health_push_enabled: bool = True        # "Pi-hole API unreachable" is pushed even in shadow mode
     digest_hour: int = 9
     poll_seconds: float = 3.0
