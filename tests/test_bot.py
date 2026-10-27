@@ -286,3 +286,61 @@ def test_start_bot_clears_any_webhook_registers_the_menu_and_resumes_the_offset(
 def test_bot_is_off_unless_enabled(make_detector):
     det = make_detector(telegram_chat_id=str(OWNER))
     assert start_bot(det, FakePihole(), run=False) is None and det.telegram.calls == []
+
+
+# --- /whois name matching (live 2026-10-27: "/whois Aswins ipad" found nothing) ----------------
+
+IPAD_A, IPAD_B = "06:da:8f:c5:97:97", "4e:09:bc:48:0a:47"
+
+
+def ipad_bot(make_detector, extra=()):
+    devices = [Device(hwaddr=IPAD_A, ips=("192.0.2.86",), first_seen=T0 - 3 * DAY, last_query=T0 - 3600),
+               Device(hwaddr=IPAD_B, ips=("192.0.2.87",), first_seen=T0 - DAY, last_query=T0 - 30), *extra]
+    bot, det, api = make_bot(make_detector, api=FakePihole(devices=devices))
+    det.intel.names[IPAD_A] = det.intel.names[IPAD_B] = "Aswins-iPad"
+    return bot, det
+
+
+def test_whois_ignores_case_spaces_hyphens_and_apostrophes(make_detector):
+    bot, det = ipad_bot(make_detector)
+    for query in ("Aswins ipad", "aswin's iPad", "ASWINS-IPAD", "aswinsipad"):
+        bot.handle(message(f"/whois {query}"), T0)
+    assert all("Aswins-iPad" in r and "No device" not in r for r in replies(det))
+
+
+def test_whois_shows_the_newest_mac_of_a_device_and_lists_its_others(make_detector):
+    bot, det = ipad_bot(make_detector)
+    bot.handle(message("/whois Aswins ipad"), T0)
+    text = replies(det)[0]
+    assert f"MAC <code>{IPAD_B}</code>" in text           # the one used most recently
+    assert "Also seen as" in text and IPAD_A in text and "Several" not in text
+
+
+def test_whois_matches_part_of_a_name_and_any_name_a_device_has(make_detector):
+    tablet = Device(hwaddr="0a:00:00:00:00:77", ips=("192.0.2.77",), first_seen=T0, last_query=T0,
+                    name="kitchen-tablet.lan")
+    bot, det = ipad_bot(make_detector, extra=[tablet])
+    det.intel.names[tablet.hwaddr] = "Kitchen"
+    det.names.update({tablet.hwaddr: ("Galaxy Tab A", "mDNS")}, T0)
+    for query in ("ipad", "kitchen tablet", "galaxy tab"):  # part of a name, the hostname, the discovered name
+        bot.handle(message(f"/whois {query}"), T0)
+    texts = replies(det)
+    assert f"MAC <code>{IPAD_B}</code>" in texts[0]
+    assert all("0a:00:00:00:00:77" in t and "Kitchen" in t for t in texts[1:])
+
+
+def test_whois_still_asks_when_different_devices_match(make_detector):
+    other = Device(hwaddr="0a:00:00:00:00:99", ips=("192.0.2.99",), first_seen=T0, last_query=T0)
+    bot, det = ipad_bot(make_detector, extra=[other])
+    det.intel.names[other.hwaddr] = "Dads iPad"
+    bot.handle(message("/whois ipad"), T0)
+    text = replies(det)[0]
+    assert "Several devices match" in text and "Dads iPad" in text and "Aswins-iPad" in text
+
+
+def test_an_exact_name_beats_a_partial_one(make_detector):
+    other = Device(hwaddr="0a:00:00:00:00:99", ips=("192.0.2.99",), first_seen=T0, last_query=T0)
+    bot, det = ipad_bot(make_detector, extra=[other])
+    det.intel.names[other.hwaddr] = "Aswins-iPad mini"
+    bot.handle(message("/whois aswins ipad"), T0)
+    assert f"MAC <code>{IPAD_B}</code>" in replies(det)[0]

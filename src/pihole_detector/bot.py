@@ -10,6 +10,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import queue
+import re
 import threading
 import time
 from collections import Counter
@@ -274,8 +275,19 @@ class Bot:
             return [d for d in devices if q in d.ips]
         except ValueError:
             pass
-        exact = [d for d in devices if self._name(d).lower() == q]
-        return exact or [d for d in devices if q in self._name(d).lower() or q in (d.name or "").lower()]
+        key = name_key(query)
+        if not key:
+            return []
+        known = {d.hwaddr: self._name_keys(d) for d in devices}
+        exact = [d for d in devices if key in known[d.hwaddr]]
+        return exact or [d for d in devices if any(key in name for name in known[d.hwaddr])]
+
+    def _name_keys(self, dev) -> set[str]:
+        """Every name a device goes by (display name, Clients comment, discovered name, Pi-hole hostname),
+        reduced to letters and digits so "Aswins ipad" finds "Aswins-iPad"."""
+        saved = self.det.names.entries.get(dev.hwaddr) or {}
+        names = (self._name(dev), self.det.intel.names.get(dev.hwaddr), saved.get("name"), dev.name)
+        return {key for name in names if (key := name_key(name))}
 
     def cmd_whois(self, args, now) -> None:
         if not args:
@@ -290,13 +302,18 @@ class Bot:
         if not found:
             self.reply(f"No device matches <code>{esc(' '.join(args))}</code>. Try /devices all.")
             return
+        found.sort(key=lambda d: -d.last_query)
+        if len(found) > 1 and len({name_key(self._name(d)) for d in found}) == 1:
+            # One device on several private MACs: show the one in use, mention the others.
+            self.reply(self._whois(found[0], now, others=found[1:]))
+            return
         if len(found) > 1:
             listed = "\n".join(f"• {esc(self._name(d))} - <code>{d.hwaddr}</code>" for d in found[:15])
             self.reply(f"Several devices match:\n{listed}\n\nAsk again with the MAC.")
             return
         self.reply(self._whois(found[0], now))
 
-    def _whois(self, dev, now: float) -> str:
+    def _whois(self, dev, now: float, others=()) -> str:
         mac = dev.hwaddr
         ip = next((i for i in dev.ips if "." in i), None)
         comment = self.det.intel.names.get(mac) or (self.det.intel.names.get(ip) if ip else None)
@@ -308,6 +325,8 @@ class Bot:
         lines = [
             f"🔎 <b>{esc(self._name(dev))}</b>", "",
             f"MAC <code>{mac}</code> ({'private' if is_private(mac) else 'burned-in'}) · {esc(dev.vendor or 'unknown vendor')}",
+            *(f"Also seen as <code>{o.hwaddr}</code>, last lookup "
+              + (f"{ago(now - o.last_query)} ago" if o.last_query else "never") for o in others),
             f"IP {esc(', '.join(dev.ips) or 'none')}",
             f"Name from: {source}" + (f" · Pi-hole hostname {esc(dev.name)}" if dev.name and source != "Pi-hole hostname" else ""),
             f"Groups: {esc(member)}",
@@ -328,6 +347,10 @@ class Bot:
         lines += [f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r['rule'])}"
                   + (f" · <code>{esc(r['domain'])}</code>" if r.get("domain") else "") for r in recent[:5]] or ["none in 30 days"]
         return _fit("\n".join(lines))
+
+
+def name_key(text: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").casefold())
 
 
 def _fit(text: str) -> str:
