@@ -11,6 +11,7 @@ from .config import Config
 from .discovery import discover
 from .domains import apex
 from .intel import DomainSet, GravityIntel
+from .names import ipv4_of
 from .namestore import NameStore, best_probe, relabel
 from .model import HIGH, Alert, Device, Query
 from .rules import Context, Seen
@@ -90,9 +91,32 @@ class Detector:
                     self.ip_to_mac[ip] = dev.hwaddr
                 self.labels[dev.hwaddr] = self.display_name(dev.hwaddr) or self.labels.get(dev.hwaddr) or dev.name or dev.hwaddr
         first_run = not self.state.get("devices_seeded", False)
-        alerts = new_devices(devices, self.ctx, now, quiet=first_run)
+        alerts = new_devices(devices, self.ctx, now, quiet=first_run, rotated_from=self.rotated_from)
         self.state.put("devices_seeded", True)
         return self.emit(alerts)
+
+    def rotated_from(self, dev: Device, now: float) -> tuple[str, str] | None:
+        """(old MAC, name) if a new private MAC answers with a name another MAC already has.
+
+        Nothing knows a just-seen MAC's name yet, so ask the device itself; it has just joined, so it is
+        awake. The name is saved either way, so its later alerts carry it.
+        """
+        ip = ipv4_of(dev) if dev.is_private_mac else None
+        if not ip:
+            return None
+        try:
+            choice = best_probe(self.probe([ip], self.cfg.rotation_probe_wait).get(ip, {}))
+        except Exception:  # an unanswered probe must not hide a new device
+            log.exception("name probe for new device %s failed", dev.hwaddr)
+            return None
+        if not choice:
+            return None
+        self.names.update({dev.hwaddr: choice}, now)
+        self.names.save()
+        name = choice[0]
+        old = next((mac for mac, e in self.names.entries.items()
+                    if mac != dev.hwaddr and e["name"].casefold() == name.casefold()), None)
+        return (old, name) if old else None
 
     def tick(self, now: float) -> list[Alert]:
         """Periodic work: pruning windows, silent devices, the daily digest."""

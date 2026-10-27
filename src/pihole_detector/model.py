@@ -71,6 +71,11 @@ class Device:
         # FTL uses "ip-<addr>" placeholders when it cannot see a MAC (e.g. bridge networking).
         return len(self.hwaddr) == 17 and self.hwaddr != "00:00:00:00:00:00"
 
+    @property
+    def is_private_mac(self) -> bool:
+        # Locally administered bit: the per-network / rotating Wi-Fi addresses phones and tablets use.
+        return self.is_real_mac and int(self.hwaddr[:2], 16) & 2 == 2
+
 
 @dataclass(frozen=True)
 class Alert:

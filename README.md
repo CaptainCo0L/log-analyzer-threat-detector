@@ -24,10 +24,10 @@ covers all of them. What it cannot see: devices using hard-coded DNS, or DoH/DoT
 | `ti_match` | HIGH | the domain, a parent or its CNAME target is on the threat-intel list (HaGeZi TIF), **whether Pi-hole blocked it or not** |
 | `tunneling` | HIGH | one client sends ≥50 unique subdomains, ≥10 over-long labels or ≥30 TXT/NULL queries under one apex in 10 min |
 | `nxdomain_burst` | HIGH | ≥20 distinct random-looking names answered NXDOMAIN for one client in 5 min (DGA malware searching for its C2) |
-| `new_device` | HIGH | a MAC address appears that has never been seen before |
+| `new_device` | HIGH | a MAC address appears that has never been seen before (LOW when it is a known device back on a new private Wi-Fi MAC) |
 | `dga_single` | MEDIUM | a random-looking domain *resolved* (not blocked, not shared by 3+ devices, not part of the device's baseline) |
 | `beaconing` | MEDIUM | a client past its learning week resolves the same new name at a near-constant interval |
-| `iot_off_baseline` | MEDIUM | a device in the Pi-hole `IoT` group queries an apex it never used during its 7-day learning period |
+| `iot_off_baseline` | MEDIUM | a device in the Pi-hole `IoT` group queries an apex it never used during its 7-day learning period, and Pi-hole didn't block it |
 | `doh_bypass` | MEDIUM | a client resolves a public DoH/DoT resolver hostname |
 | `device_silent` | LOW | an active client has sent no queries for 24 h |
 

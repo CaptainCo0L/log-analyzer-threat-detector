@@ -81,10 +81,15 @@ A + AAAA lookups less than 2 s apart count as one event.
 - `new_device`: the first device snapshot is recorded silently. FTL's `ip-<addr>`
   placeholders (shown when it cannot see MACs, e.g. in Docker bridge mode) are ignored. Expect
   hits from **private/rotating Wi-Fi MACs** (iOS, Android, Windows): a known phone that
-  rotates its address shows up as "new". That is why this rule may be downgraded after the
-  shadow week.
+  rotates its address shows up as "new" (live: the iPad, 2026-10-24, HIGH). So a new
+  *locally administered* MAC is asked its own name (the same probes as `names`, IPv4,
+  `ROTATION_PROBE_WAIT` 3 s). If the name matches one saved for another MAC, it is LOW
+  ("rejoined on a new private Wi-Fi MAC"). No answer, a new name or a burned-in MAC stays
+  HIGH. The name is saved either way. A device can claim any name over mDNS, so a spoofed
+  name only lowers the alert to the digest; it never hides it.
 - `iot_off_baseline`: clients in the Pi-hole group named by `IOT_GROUP` (by MAC). Fires on
-  NEW relationships only (see [Baseline](#baseline)), shared apexes included.
+  NEW relationships only (see [Baseline](#baseline)), shared apexes included, blocked
+  lookups excluded (live: Sony TV -> a gravity-blocked datadoghq.com, 2026-10-24).
 - `device_silent`: needs ≥50 lifetime queries, alerts once per silence.
 
 ## Baseline

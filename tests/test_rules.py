@@ -256,6 +256,13 @@ def test_iot_off_baseline_only_after_learning(make_detector):
     assert IOT_MAC in alerts[0].address
 
 
+def test_iot_off_baseline_skips_blocked_queries(make_detector):
+    # live 2026-10-24: Sony TV -> browser-intake-us5-datadoghq.com, status GRAVITY; Pi-hole already stopped it
+    det = make_detector(learning_days=7)
+    det.process_query(q("vendor-cloud.example", t=0, ip=IOT_IP))
+    assert det.process_query(q("telemetry.example", t=8 * DAY, ip=IOT_IP, status="GRAVITY")) == []
+
+
 def test_iot_rule_ignores_non_iot_clients(make_detector):
     det = make_detector(learning_days=7)
     det.process_query(q("a.example", t=0, ip=PC_IP))
@@ -270,6 +277,46 @@ def test_new_device_quiet_on_first_snapshot_then_alerts(make_detector):
     alerts = det.process_devices([new, placeholder], T0 + 100)
     assert rules_of(alerts) == ["new_device"] and alerts[0].severity == "HIGH"
     assert det.process_devices([new], T0 + 200) == []
+
+
+IPAD_OLD, IPAD_NEW = "02:00:00:00:00:30", "06:00:00:00:00:31"
+
+
+def test_new_private_mac_answering_with_a_known_name_is_a_rotation(make_detector):
+    # live 2026-10-24: the iPad came back on a new private MAC and raised a HIGH new_device
+    det = make_detector()
+    det.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS")}, T0)
+    calls = []
+    det.probe = lambda ips, wait: calls.append(ips) or {"192.0.2.31": {"mDNS": "aswins-ipad"}}
+    new = Device(hwaddr=IPAD_NEW, ips=("192.0.2.31", "fe80::1"), first_seen=T0)
+    alerts = det.process_devices([new], T0 + 100)
+    assert calls == [["192.0.2.31"]]  # IPv4 only, just this device
+    a = alerts[0]
+    assert a.rule == "new_device" and a.severity == "LOW" and det.telegram.messages == []
+    assert a.client == "aswins-ipad" and a.evidence["previous_mac"] == IPAD_OLD
+    assert "new private Wi-Fi MAC" in a.message
+    assert det.names.name(IPAD_NEW) == "aswins-ipad"  # saved, so later alerts carry the name
+
+
+def test_new_device_stays_high_when_name_unknown_or_mac_is_burned_in(make_detector):
+    det = make_detector()
+    det.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS")}, T0)
+    det.probe = lambda ips, wait: {"192.0.2.31": {"mDNS": "someone-else"}, "192.0.2.32": {"mDNS": "Aswins-iPad"}}
+    stranger = Device(hwaddr=IPAD_NEW, ips=("192.0.2.31",), first_seen=T0)
+    # a universally administered (burned-in) MAC never rotates, whatever name it claims
+    burned_in = Device(hwaddr="00:11:22:33:44:55", ips=("192.0.2.32",), first_seen=T0)
+    alerts = det.process_devices([stranger, burned_in], T0 + 100)
+    assert [a.severity for a in alerts] == ["HIGH", "HIGH"]
+
+
+def test_new_device_probe_failure_keeps_high(make_detector):
+    det = make_detector()
+
+    def broken(ips, wait):
+        raise OSError("network unreachable")
+    det.probe = broken
+    alerts = det.process_devices([Device(hwaddr=IPAD_NEW, ips=("192.0.2.31",), first_seen=T0)], T0 + 100)
+    assert [a.severity for a in alerts] == ["HIGH"]
 
 
 def test_device_silent_after_24h_once(make_detector):

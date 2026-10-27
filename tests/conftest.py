@@ -34,9 +34,11 @@ def q(domain, t=0.0, ip=PC_IP, reply="IP", status="FORWARDED", qtype="A", **kw) 
 @pytest.fixture
 def make_detector(tmp_path):
     def factory(threats=("evil-c2.example",), iot=(IOT_MAC,), **cfg_overrides):
+        cfg_overrides.setdefault("names_file", str(tmp_path / "names.json"))
         cfg = Config(gravity_db=str(tmp_path / "missing.db"), **cfg_overrides)
         intel = GravityIntel(tmp_path / "missing.db", "tif", "IoT", extra_threats=threats, extra_iot=iot)
-        det = Detector(cfg, State(":memory:"), intel, JsonlSink(tmp_path / "alerts.jsonl"), FakeTelegram())
+        det = Detector(cfg, State(":memory:"), intel, JsonlSink(tmp_path / "alerts.jsonl"), FakeTelegram(),
+                       probe=lambda ips, wait: {})  # never touch the real network
         det.process_devices([
             Device(hwaddr=PC_MAC, ips=(PC_IP,), first_seen=T0),
             Device(hwaddr=IOT_MAC, ips=(IOT_IP,), first_seen=T0),

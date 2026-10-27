@@ -63,7 +63,8 @@ def detail(alert: Alert) -> str:
         samples = ", ".join(ev.get("samples", [])[:3])
         return f"{ev.get('unique')} failed lookups in 5 min, e.g. {samples}"
     if rule == "new_device":
-        return f"Vendor: {ev.get('vendor') or 'unknown'} · IP: {', '.join(ev.get('ips') or []) or 'none'}"
+        was = f" · was {ev['previous_mac']}" if ev.get("previous_mac") else ""
+        return f"Vendor: {ev.get('vendor') or 'unknown'} · IP: {', '.join(ev.get('ips') or []) or 'none'}{was}"
     if rule == "beaconing":
         return f"Every ~{ev.get('interval_s') or 0:.0f} s, {ev.get('hits')} times in a row"
     if rule == "device_silent":
