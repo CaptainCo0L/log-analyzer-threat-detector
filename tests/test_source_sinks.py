@@ -30,6 +30,7 @@ class FakeFtl:
         self.calls = []
         self.logins = 0
         self.sid = None
+        self.writes = []
 
     def __call__(self, req, timeout=None):
         path = req.full_url.split("/api", 1)[1]
@@ -55,8 +56,17 @@ class FakeFtl:
             return FakeResp(json.dumps({"queries": rows, "cursor": 1}).encode())
         if path.startswith("/network/devices"):
             return FakeResp(json.dumps({"devices": [
-                {"hwaddr": "02:00:00:00:00:10", "firstSeen": T0, "macVendor": "Acme",
+                {"hwaddr": "02:00:00:00:00:10", "firstSeen": T0, "lastQuery": T0 + 60, "macVendor": "Acme",
                  "ips": [{"ip": "192.0.2.10", "name": "pc.lan"}]}]}).encode())
+        if path.startswith("/groups"):
+            return FakeResp(json.dumps({"groups": [{"id": 0, "name": "Default"}, {"id": 1, "name": "Aswin"}]}).encode())
+        if path.startswith("/clients"):
+            self.writes.append((req.get_method(), path, json.loads(req.data) if req.data else None))
+            if req.get_method() == "GET":
+                return FakeResp(json.dumps({"clients": [
+                    {"client": "EA:65:E1:2F:E9:83", "comment": "iPad", "groups": [0, 1], "name": "", "id": 3},
+                    {"client": "192.0.2.10", "comment": "by IP", "groups": [0], "name": "", "id": 4}]}).encode())
+            return FakeResp(b"" if req.get_method() == "DELETE" else b'{"processed": {"errors": []}}')
         raise AssertionError(path)
 
 
@@ -104,6 +114,32 @@ def test_unreachable_raises_api_error():
 def test_devices_parsed_with_names():
     dev = PiholeApi("http://pihole:8081", "pw", opener=FakeFtl([])).devices()[0]
     assert dev.hwaddr == "02:00:00:00:00:10" and dev.name == "pc.lan" and dev.is_real_mac
+
+
+def test_devices_carry_their_last_query_time():
+    assert PiholeApi("http://pihole:8081", "pw", opener=FakeFtl([])).devices()[0].last_query == T0 + 60
+
+
+def test_clients_lists_mac_entries_only_lowercased_but_keeps_pihole_spelling():
+    from pihole_detector.rotation import Client
+    assert PiholeApi("http://pihole:8081", "pw", opener=FakeFtl([])).clients() == [
+        Client(mac="ea:65:e1:2f:e9:83", client="EA:65:E1:2F:E9:83", comment="iPad", groups=(0, 1))]
+
+
+def test_groups_maps_ids_to_names():
+    assert PiholeApi("http://pihole:8081", "pw", opener=FakeFtl([])).groups() == {0: "Default", 1: "Aswin"}
+
+
+def test_client_writes_send_the_entry_and_reauthenticate_once():
+    from pihole_detector.rotation import Client
+    ftl = FakeFtl([], expire_after=2)  # the session dies on the first write
+    api = PiholeApi("http://pihole:8081", "pw", opener=ftl)
+    api.add_client(Client(mac="06:da:8f:c5:97:97", client="06:da:8f:c5:97:97", comment="iPad", groups=(0, 1)))
+    api.delete_client("EA:65:E1:2F:E9:83")
+    assert ftl.writes == [
+        ("POST", "/clients", {"client": "06:da:8f:c5:97:97", "comment": "iPad", "groups": [0, 1]}),
+        ("DELETE", "/clients/EA%3A65%3AE1%3A2F%3AE9%3A83", None)]
+    assert ftl.logins == 2
 
 
 def test_logout_deletes_session():

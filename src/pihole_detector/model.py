@@ -53,6 +53,7 @@ class Device:
     first_seen: float
     vendor: str | None = None
     name: str | None = None
+    last_query: float = 0.0
 
     @classmethod
     def from_api(cls, item: dict) -> "Device":
@@ -64,6 +65,7 @@ class Device:
             first_seen=float(item.get("firstSeen") or 0),
             vendor=item.get("macVendor") or None,
             name=name,
+            last_query=float(item.get("lastQuery") or 0),
         )
 
     @property

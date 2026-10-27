@@ -36,6 +36,9 @@ class Config:
     rotation_probe_wait: float = 3.0         # a new private MAC is asked its name, to spot a rotated MAC
     nmap_enabled: bool = True                # discovery also nmaps the devices the other probes left unnamed
     nmap_exclude: tuple[str, ...] = ()       # IPs nmap must never touch (comma separated)
+    rotation_sync: bool = False              # follow a rotated private MAC in Pi-hole Clients (adds/deletes!)
+    rotation_keep: int = 2                   # MACs kept per device: the most recently seen ones
+    client_changes_path: str = "/data/client_changes.jsonl"  # every Clients change, for clients-undo
     telegram_token: str = field(default="", repr=False)
     telegram_chat_id: str = ""
     push_enabled: bool = False              # shadow mode by default

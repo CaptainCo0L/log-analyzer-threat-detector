@@ -1,8 +1,9 @@
-"""CLI: `python -m pihole_detector run | replay FILE | seed | digest | report`."""
+"""CLI: `python -m pihole_detector run | replay FILE | seed | digest | report | names | clients-undo`."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import signal
 import sys
@@ -17,6 +18,7 @@ from .model import Alert
 from .namestore import NameStore, best_probe, relabel
 from .names import build_names_report, ipv4_of
 from .report import build_report, load_records
+from .rotation import Client
 from .sinks import JsonlSink, Telegram, build_digest, format_down, format_push, format_test, format_up
 from .source import ApiError, PiholeApi, Tail, read_replay
 from .state import State
@@ -86,6 +88,7 @@ def cmd_seed(cfg: Config, days: float) -> int:
 def cmd_run(cfg: Config) -> int:
     det = build(cfg)
     api = PiholeApi(cfg.pihole_url, cfg.pihole_password)
+    det.clients_api = api  # used only when ROTATION_SYNC is on
     stopping = False
 
     def stop(*_):
@@ -153,6 +156,7 @@ def main(argv=None) -> int:
     nm = sub.add_parser("names", help="suggest names for Pi-hole's devices (mDNS/SSDP/NetBIOS/nmap); writes nothing")
     nm.add_argument("--wait", type=float, default=8, help="seconds to listen for replies")
     nm.add_argument("--save", action="store_true", help="store the names found, for alerts and reports to use")
+    sub.add_parser("clients-undo", help="reverse the last rotation sync change to Pi-hole Clients")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -179,6 +183,8 @@ def main(argv=None) -> int:
         return cmd_report(cfg, args.file, args.days)
     if args.cmd == "names":
         return cmd_names(cfg, args.wait, save=args.save)
+    if args.cmd == "clients-undo":
+        return cmd_clients_undo(cfg)
     return cmd_run(cfg)
 
 
@@ -206,6 +212,31 @@ def cmd_names(cfg: Config, wait: float, api=None, probe=discover, save: bool = F
         store.save()
         print("\n".join([f"Saved {len(best)} name(s) to {cfg.names_file}",
                          *(f"  {mac}: {old or '(none)'} -> {new}" for mac, old, new in changes)]))
+    return 0
+
+
+def cmd_clients_undo(cfg: Config, api=None) -> int:
+    """Reverse the newest rotation sync not yet undone: remove the MAC it added, re-add those it removed."""
+    path = Path(cfg.client_changes_path)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    records = [json.loads(line) for line in lines if line.strip()]
+    undone = {r["undo_of"] for r in records if "undo_of" in r}
+    change = next((r for r in reversed(records) if "added" in r and r["time"] not in undone), None)
+    if not change:
+        print("nothing to undo")
+        return 1
+    api = api or PiholeApi(cfg.pihole_url, cfg.pihole_password)
+    try:
+        api.delete_client(change["added"]["client"])
+        for entry in change["deleted"]:
+            api.add_client(Client(**{**entry, "groups": tuple(entry["groups"])}))
+    finally:
+        if hasattr(api, "logout"):
+            api.logout()
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"time": time.time(), "undo_of": change["time"]}) + "\n")
+    print(f"undone: removed {change['added']['mac']}, restored "
+          f"{', '.join(e['mac'] for e in change['deleted']) or 'nothing'} ({change['name']})")
     return 0
 
 

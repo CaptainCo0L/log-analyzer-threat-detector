@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections import Counter
+from dataclasses import asdict
+from pathlib import Path
 
 from .baseline import Baseline
 from .config import Config
@@ -14,6 +17,7 @@ from .intel import DomainSet, GravityIntel
 from .names import ipv4_of
 from .namestore import NameStore, best_probe, relabel
 from .model import HIGH, Alert, Device, Query
+from .rotation import format_sync, is_private, plan_sync
 from .rules import Context, Seen
 from .rules.devices import IotOffBaseline, new_devices, silent_devices
 from .rules.intel_rules import DohBypass, ThreatIntelMatch
@@ -27,8 +31,9 @@ log = logging.getLogger(__name__)
 
 class Detector:
     def __init__(self, cfg: Config, state: State, intel: GravityIntel, jsonl: JsonlSink, telegram: Telegram,
-                 names: NameStore | None = None, probe=discover):
+                 names: NameStore | None = None, probe=discover, clients_api=None):
         self.cfg = cfg
+        self.clients_api = clients_api  # PiholeApi, for rotation sync; None leaves Pi-hole alone
         self.names = names or NameStore(cfg.names_file)
         self.probe = probe
         self.state = state
@@ -40,6 +45,7 @@ class Detector:
         self.rules = [ThreatIntelMatch(), DohBypass(), DgaSingle(), NxdomainBurst(),
                       Tunneling(), Beaconing(), IotOffBaseline()]
         self.ip_to_mac: dict[str, str] = {}
+        self.last_seen: dict[str, float] = {}  # MAC -> Pi-hole lastQuery, from the latest device snapshot
         self.labels: dict[str, str] = {}
         self.stats: Counter = Counter()
         self.digests = True
@@ -85,6 +91,7 @@ class Detector:
         return self.emit(alerts)
 
     def process_devices(self, devices: list[Device], now: float) -> list[Alert]:
+        self.last_seen = {dev.hwaddr: dev.last_query for dev in devices}
         for dev in devices:
             if dev.is_real_mac:
                 for ip in dev.ips:
@@ -113,6 +120,7 @@ class Detector:
             return None
         self.names.update({dev.hwaddr: choice}, now)
         self.names.save()
+        self.sync_rotation(dev.hwaddr, *choice, now)
         name = choice[0]
         old = next((mac for mac, e in self.names.entries.items()
                     if mac != dev.hwaddr and e["name"].casefold() == name.casefold()), None)
@@ -166,9 +174,50 @@ class Detector:
                 best[self.ip_to_mac[ip]] = choice
         changes = self.names.update(best, now)
         self.names.save()
+        for mac, (name, source) in best.items():
+            if is_private(mac):  # one that was asleep when it joined is only found now
+                self.sync_rotation(mac, name, source, now)
         for mac, old, new in changes:
             log.info("name for %s: %s -> %s", mac, old or "(none)", new)
         log.info("name discovery: %d device(s) answered of %d probed", len(best), len(ips))
+
+    def sync_rotation(self, mac: str, name: str, source: str, now: float) -> None:
+        """Move the device's Pi-hole Clients entry onto its new private MAC (see rotation.py). Every
+        change is logged for clients-undo and sent to Telegram. A failure leaves the alert as it was."""
+        if not (self.cfg.rotation_sync and self.clients_api):
+            return
+        try:
+            plan = plan_sync(mac, name, source, self.clients_api.clients(), self.names.entries,
+                             self.last_seen, self.cfg.rotation_keep)
+        except Exception:
+            log.exception("rotation sync for %s: reading Pi-hole Clients failed", mac)
+            return
+        if not plan.add:
+            if plan.reason != "already a Pi-hole client":
+                log.info("rotation sync for %s (%s): nothing done, %s", mac, name, plan.reason)
+            return
+        try:
+            self.clients_api.add_client(plan.add)
+        except Exception:
+            log.exception("rotation sync for %s: adding it to Pi-hole Clients failed", mac)
+            return
+        deleted, error = [], None
+        try:
+            for entry in plan.delete:
+                self.clients_api.delete_client(entry.client)
+                deleted.append(entry)
+        except Exception as exc:
+            error = str(exc)
+            log.exception("rotation sync for %s: removing an old MAC failed", mac)
+        with Path(self.cfg.client_changes_path).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"time": now, "name": name, "added": asdict(plan.add),
+                                     "deleted": [asdict(e) for e in deleted], "error": error}) + "\n")
+        log.info("rotation sync: %s added %s, removed %s", name, mac, [e.mac for e in deleted] or "none")
+        try:
+            groups = self.clients_api.groups()
+        except Exception:
+            groups = {}
+        self.telegram.send(format_sync(name, plan.add, deleted, groups, error), now, capped=False)
 
     # outputs ------------------------------------------------------------------
     def emit(self, alerts: list[Alert]) -> list[Alert]:

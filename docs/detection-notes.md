@@ -86,7 +86,9 @@ A + AAAA lookups less than 2 s apart count as one event.
   `ROTATION_PROBE_WAIT` 3 s). If the name matches one saved for another MAC, it is LOW
   ("rejoined on a new private Wi-Fi MAC"). No answer, a new name or a burned-in MAC stays
   HIGH. The name is saved either way. A device can claim any name over mDNS, so a spoofed
-  name only lowers the alert to the digest; it never hides it.
+  name only lowers the alert to the digest; it never hides it. With `ROTATION_SYNC` on, an
+  mDNS/Bonjour match also moves the device's Pi-hole Clients entry onto the new MAC (README,
+  "Rotation sync"). The alert is unchanged either way.
 - `iot_off_baseline`: clients in the Pi-hole group named by `IOT_GROUP` (by MAC). Fires on
   NEW relationships only (see [Baseline](#baseline)), shared apexes included, blocked
   lookups excluded (live: Sony TV -> a gravity-blocked datadoghq.com, 2026-10-24).

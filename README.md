@@ -84,7 +84,7 @@ python -m pihole_detector names         # suggest names for Pi-hole's devices vi
 
 A router that serves no reverse DNS leaves alerts naming devices `(ip, mac)`. `names` asks each
 device Pi-hole knows about for its own name (mDNS reverse lookup, Bonjour browse, SSDP, NetBIOS)
-and prints a table plus a block to paste into Pi-hole's Clients comments. It never edits Pi-hole.
+and prints a table plus a block to paste into Pi-hole's Clients comments. `names` never edits Pi-hole.
 `names --save` also stores what it found in `data/names.json` (MAC → name, source, last confirmed).
 
 A device is named, in order, by: its **Pi-hole Clients comment**, then the **saved discovered
@@ -111,6 +111,26 @@ sudo docker run --rm --network host --env-file /mnt/Home/apps/pihole/.env \
   -v /mnt/Home/apps/pihole/etc-pihole:/pihole:ro -v /mnt/Home/apps/pihole-detector/data:/data \
   pihole-detector:local names --save
 ```
+
+### Rotation sync (`ROTATION_SYNC=true`)
+
+The one thing that edits Pi-hole. Phones and tablets rotate their private Wi-Fi MAC, which drops
+them out of any group set by MAC. When a new private MAC answers with an **mDNS/Bonjour** name that
+is saved for the device's other MACs (at join time, or in the weekly discovery if it was asleep), the
+service adds the new MAC to Pi-hole Clients with the comment and **all groups** of that device's most
+recently seen entry (Default is always included). It then keeps the device's `ROTATION_KEEP` (2)
+most recently seen MACs and deletes the older entries.
+
+It never deletes a burned-in MAC, never acts on SSDP/NetBIOS/nmap names, and never touches an
+entry that is not saved under that name. If the device's entries disagree on groups, it does nothing.
+Each change goes to Telegram and to `data/client_changes.jsonl`. To reverse the latest one:
+
+```bash
+sudo docker exec pihole-detector python -m pihole_detector clients-undo
+```
+
+Any device can claim any name over mDNS, so a spoofer could take a device's groups. You would see
+it on Telegram straight away.
 
 All settings are environment variables named after the fields in
 [`config.py`](src/pihole_detector/config.py) (`POLL_SECONDS`, `NXDOMAIN_THRESHOLD`, …).

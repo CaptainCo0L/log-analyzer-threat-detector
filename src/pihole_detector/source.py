@@ -10,6 +10,8 @@ import urllib.request
 from pathlib import Path
 
 from .model import Device, Query
+from .namestore import MAC
+from .rotation import Client
 
 log = logging.getLogger(__name__)
 
@@ -58,19 +60,22 @@ class PiholeApi:
         self.sid = session.get("sid")  # None when Pi-hole has no password set
 
     def get(self, path: str, params: dict | None = None) -> dict:
+        return self._call("GET", path, params)
+
+    def _call(self, method: str, path: str, params: dict | None = None, body: dict | None = None) -> dict:
         for attempt in (1, 2):
             if self.sid is None and self.password:
                 self.login()
             try:
-                return self._request("GET", path, params)
+                return self._request(method, path, params, body)
             except urllib.error.HTTPError as exc:
                 if exc.code == 401 and attempt == 1:
                     self.sid = None  # expired; log in again once
                     continue
-                raise ApiError(f"GET {path}: HTTP {exc.code}") from exc
+                raise ApiError(f"{method} {path}: HTTP {exc.code}") from exc
             except (urllib.error.URLError, OSError, ValueError) as exc:
-                raise ApiError(f"GET {path}: {exc}") from exc
-        raise ApiError(f"GET {path}: unauthorised")
+                raise ApiError(f"{method} {path}: {exc}") from exc
+        raise ApiError(f"{method} {path}: unauthorised")
 
     def logout(self) -> None:
         if not self.sid:
@@ -114,6 +119,26 @@ class PiholeApi:
     def devices(self) -> list[Device]:
         result = self.get("/network/devices", {"max_devices": 500, "max_addresses": 10})
         return [Device.from_api(item) for item in result.get("devices") or []]
+
+    def clients(self) -> list[Client]:
+        """The Pi-hole Clients entries that are MACs (not IPs, subnets or hostnames)."""
+        out = []
+        for item in self.get("/clients").get("clients") or []:
+            mac = (item.get("client") or "").lower()
+            if MAC.fullmatch(mac):
+                out.append(Client(mac=mac, client=item["client"], comment=item.get("comment") or "",
+                                  groups=tuple(item.get("groups") or ())))
+        return out
+
+    def groups(self) -> dict[int, str]:
+        return {g["id"]: g["name"] for g in self.get("/groups").get("groups") or []}
+
+    def add_client(self, entry: Client) -> None:
+        self._call("POST", "/clients", body={"client": entry.client, "comment": entry.comment,
+                                             "groups": list(entry.groups)})
+
+    def delete_client(self, client: str) -> None:
+        self._call("DELETE", "/clients/" + urllib.parse.quote(client, safe=""))
 
 
 class Tail:
