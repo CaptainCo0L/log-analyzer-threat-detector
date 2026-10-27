@@ -23,7 +23,7 @@ from .rules.devices import IotOffBaseline, new_devices, silent_devices
 from .rules.intel_rules import DohBypass, ThreatIntelMatch
 from .rules.randomness import DgaSingle, NxdomainBurst
 from .rules.traffic import Beaconing, Tunneling
-from .bot import action_button, alert_buttons, is_muted
+from .bot import action_button, alert_buttons, held_summary, hold, hold_reason, is_muted
 from .sinks import JsonlSink, Telegram, build_digest, format_push
 from .state import State
 
@@ -143,10 +143,22 @@ class Detector:
                      self.stats["queries"], self.stats["alert_HIGH"], self.stats["alert_MEDIUM"],
                      self.stats["alert_LOW"])
         self.names.reload_if_changed()
+        self.flush_held(now)
         if self.digests:
             self.maybe_discover(now)  # first, so the report below already carries fresh names
             self.maybe_digest(now)
         return alerts
+
+    def flush_held(self, now: float) -> bool:
+        """Once /mute or quiet hours are over: one message with everything they held back."""
+        held = self.state.get("bot:held")
+        if not held or hold_reason(self.state, now):
+            return False
+        text, buttons = held_summary(self.state, held, now)
+        self.telegram.send(text, now, capped=False, buttons=buttons)
+        self.state.put("bot:held", [])
+        self.state.put("bot:held_reason", None)
+        return True
 
     def maybe_discover(self, now: float) -> bool:
         """Once a week, at report time: ask the known devices for their names and save them."""
@@ -234,6 +246,9 @@ class Detector:
             self.jsonl.write(alert)
             log.info("[%s] %s: %s", alert.severity, alert.rule, alert.message)
             if alert.severity == HIGH and self.cfg.push_enabled and not is_muted(self.state, alert, alert.time):
+                if hold_reason(self.state, alert.time):
+                    hold(self.state, alert)  # /mute or quiet hours: sent as one summary when they end
+                    continue
                 buttons = alert_buttons(self.state, alert, alert.time) if self.cfg.bot_enabled else None
                 self.telegram.send(format_push(alert, hint=not buttons), alert.time, buttons=buttons)
         return out

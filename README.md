@@ -73,6 +73,20 @@ It can also change Pi-hole (each reply has **↩️ Undo**, and every change is 
 Blocks and allows apply to everyone (Default group). A write command sent more than 5 minutes
 before the bot sees it (the detector was down, say) is not run; send it again.
 
+Alert settings:
+
+| Command | Effect |
+| --- | --- |
+| `/mute [30m\|1h\|8h\|1d]` · `/unmute` | Hold instant alerts (default 1 h, at most 7 d) |
+| `/quiet 23:00-07:00` · `/quiet off` | Hold instant alerts every day in that window (can cross midnight) |
+| `/push on\|off` | Instant alerts on or off (`PUSH_ENABLED`) |
+| `/settings` · `/set NAME value` · `/unset NAME` | Show or change thresholds: `NXDOMAIN_*`, `TUNNEL_*`, `BEACON_*`, `SILENT_*`, `DEDUP_HOURS`, `DIGEST_HOUR`, `PUSH_CAP_PER_HOUR`, `ROTATION_SYNC`, `ROTATION_KEEP`, `NMAP_ENABLED`, `NMAP_EXCLUDE`, `PUSH_ENABLED` |
+
+Held alerts are still logged, and when the mute or quiet window ends they arrive as one message
+with a Block button per domain. Health and rotation messages are never held. `/set` values are
+saved in `state.db` and survive restarts; `/unset` goes back to the `.env` value. Paths, URLs and
+secrets can't be set from chat.
+
 Pushed alerts carry buttons:
 - **🛡 Block `<apex>`** (only when the domain resolved) adds a Pi-hole regex deny for the apex and every
   subdomain, for everyone (Default group), the same thing `pihole --wild` does.

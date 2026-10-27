@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import logging
 import queue
 import re
@@ -18,6 +19,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import clientlog
+from .config import SETTABLE, Config, parse_setting
 from .domains import apex
 from .namestore import MAC, mac_from_address, relabel
 from .report import build_report
@@ -40,10 +42,18 @@ BOT_COMMANDS = [
     ("resume", "Turn blocking back on"),
     ("name", "Name a device: /name <device> <new name>"),
     ("group", "Put a device in a group: /group <device> <group> [remove]"),
+    ("mute", "Hold instant alerts: /mute 1h (30m, 8h, 1d; up to 7d)"),
+    ("unmute", "Send held alerts now and stop holding"),
+    ("quiet", "Quiet hours: /quiet 23:00-07:00, or /quiet off"),
+    ("push", "Instant alerts on or off: /push off"),
+    ("settings", "Show the thresholds you can change"),
+    ("set", "Change one: /set NXDOMAIN_THRESHOLD 30"),
+    ("unset", "Go back to the .env value: /unset NXDOMAIN_THRESHOLD"),
     ("help", "What I can do"),
 ]
 # Commands that change something; refused when older than STALE_SECONDS.
-WRITE_COMMANDS = {"block", "unblock", "allow", "unallow", "pause", "resume", "name", "group"}
+WRITE_COMMANDS = {"block", "unblock", "allow", "unallow", "pause", "resume", "name", "group",
+                  "mute", "unmute", "quiet", "push", "set", "unset"}
 MAX_PAUSE_MINUTES = 60
 STALE_SECONDS = 300
 ONLINE_SECONDS = 900
@@ -92,6 +102,63 @@ def alert_buttons(state, alert, now: float) -> list[list[dict]]:
     if command and len(command) <= 256:  # copy_text holds 1-256 characters
         rows.append([{"text": "📋 Copy block command", "copy_text": {"text": command}}])
     return rows
+
+
+QUIET = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)-([01]?\d|2[0-3]):([0-5]\d)")
+MAX_HELD = 200
+MAX_MUTE = 7 * 86400
+
+
+def in_quiet(quiet: str | None, now: float) -> bool:
+    """Is local time inside "HH:MM-HH:MM"? A range like 23:00-07:00 crosses midnight."""
+    match = QUIET.fullmatch(quiet or "")
+    if not match:
+        return False
+    h1, m1, h2, m2 = map(int, match.groups())
+    start, end = h1 * 60 + m1, h2 * 60 + m2
+    local = time.localtime(now)
+    minute = local.tm_hour * 60 + local.tm_min
+    return start <= minute < end if start <= end else minute >= start or minute < end
+
+
+def hold_reason(state, now: float) -> str | None:
+    """Why HIGH pushes are being held right now: "muted", "quiet" or None."""
+    if (state.get("bot:mute_until") or 0) > now:
+        return "muted"
+    if in_quiet(state.get("bot:quiet"), now):
+        return "quiet"
+    return None
+
+
+def hold(state, alert) -> None:
+    held = state.get("bot:held") or []
+    held.append(alert.to_dict())
+    state.put("bot:held", held[-MAX_HELD:])
+    if not state.get("bot:held_reason"):
+        state.put("bot:held_reason", hold_reason(state, alert.time))
+
+
+def held_summary(state, held: list[dict], now: float) -> tuple[str, list]:
+    """One message for everything /mute or quiet hours held back, with a Block button per domain."""
+    reason = state.get("bot:held_reason")
+    opener = "While you were muted" if reason == "muted" else "While it was quiet"
+    lines = [f"🔔 <b>{opener}: {len(held)} alert{'' if len(held) == 1 else 's'}</b>", ""]
+    for r in held[:20]:
+        title = RULES.get(r["rule"], (r["rule"], ""))[0]
+        domain = f" · <code>{esc(r['domain'])}</code>" if r.get("domain") else ""
+        lines.append(f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r.get('client'))} · "
+                     f"{esc(title)}{domain}")
+    if len(held) > 20:
+        lines.append(f"<i>+{len(held) - 20} more in the daily report</i>")
+    targets = []
+    for r in held:
+        command = (r.get("evidence") or {}).get("block") or ""
+        target = command.rsplit(" ", 1)[-1]
+        if APEX.fullmatch(target) and target not in targets:
+            targets.append(target)
+    buttons = [[action_button(state, f"🛡 Block {t}", {"kind": "block", "domain": t}, now, "danger")]
+               for t in targets[:10]]
+    return _fit("\n".join(lines)), buttons
 
 
 def ago(seconds: float) -> str:
@@ -156,10 +223,11 @@ def drain(inbox: queue.Queue, bot: "Bot", state, now: float) -> None:
 
 
 class Bot:
-    def __init__(self, det, api, telegram, started: float | None = None):
+    def __init__(self, det, api, telegram, started: float | None = None, env=None):
         self.det, self.api, self.telegram = det, api, telegram
         self.started = started if started is not None else time.time()
         self.owner = str(det.cfg.telegram_chat_id)
+        self.env = os.environ if env is None else env  # the .env values /unset goes back to
         self._strangers: set[str] = set()
 
     # dispatch -------------------------------------------------------------------------------
@@ -469,6 +537,92 @@ class Bot:
             return
         self._change(command, ops, undo, f"👥 Added {label} to <b>{name}</b> (and kept Default).", now)
 
+    # alert settings -------------------------------------------------------------------------
+    def cmd_mute(self, args, now) -> None:
+        match = re.fullmatch(r"(\d+)\s*([mhd])", args[0].lower()) if args else None
+        seconds = int(match[1]) * {"m": 60, "h": 3600, "d": 86400}[match[2]] if match else 3600
+        seconds = min(max(seconds, 60), MAX_MUTE)
+        self.det.state.put("bot:mute_until", now + seconds)
+        unmute = self.button("🔔 Unmute now", {"kind": "unmute_all"}, now)
+        self.reply(f"🔕 Instant alerts held until {esc(when(now + seconds))}. They're still logged, and you'll "
+                   "get them in one message when it ends. Health and rotation messages still come through.",
+                   buttons=[[unmute]])
+
+    def cmd_unmute(self, args, now) -> None:
+        self.press_unmute_all({}, now)
+
+    def press_unmute_all(self, payload: dict, now: float) -> str:
+        self.det.state.put("bot:mute_until", 0)
+        held = len(self.det.state.get("bot:held") or [])
+        quiet = " Quiet hours still apply." if hold_reason(self.det.state, now) else ""
+        self.reply(f"🔔 Unmuted.{quiet}" + (f" The {held} held alert{'s' if held != 1 else ''} follow." if held and not quiet else ""))
+        return "Unmuted"
+
+    def cmd_quiet(self, args, now) -> None:
+        state = self.det.state
+        if not args:
+            current = state.get("bot:quiet")
+            self.reply(f"Quiet hours: {esc(current) if current else 'off'}. Set with /quiet 23:00-07:00, "
+                       "or /quiet off.")
+            return
+        if args[0].lower() == "off":
+            state.put("bot:quiet", None)
+            self.reply("🔔 Quiet hours off.")
+            return
+        if not QUIET.fullmatch(args[0]):
+            self.reply("Usage: /quiet HH:MM-HH:MM (24-hour, e.g. /quiet 23:00-07:00) or /quiet off")
+            return
+        state.put("bot:quiet", args[0])
+        self.reply(f"🌙 Quiet hours {esc(args[0])}: instant alerts in that window are held and sent together "
+                   "when it ends. Health and rotation messages still come through.")
+
+    def cmd_push(self, args, now) -> None:
+        if not args or args[0].lower() not in ("on", "off"):
+            self.reply(f"Instant alerts are {'on' if self.det.cfg.push_enabled else 'off'}. Usage: /push on | off")
+            return
+        self.cmd_set(["PUSH_ENABLED", "true" if args[0].lower() == "on" else "false"], now)
+
+    def _apply_setting(self, field_name: str, value) -> None:
+        setattr(self.det.cfg, field_name, value)
+        if field_name == "push_cap_per_hour":
+            self.telegram.cap = value  # Telegram keeps its own copy of the cap
+
+    def cmd_set(self, args, now) -> None:
+        if len(args) < 2:
+            self.reply("Usage: /set NAME value, e.g. /set NXDOMAIN_THRESHOLD 30. /settings lists the names.")
+            return
+        raw = " ".join(args[1:])
+        try:
+            field_name, value = parse_setting(args[0], raw)
+        except ValueError as exc:
+            self.reply(f"⚠️ {esc(exc)}. /settings lists what can be changed.")
+            return
+        self.det.state.put(f"setting:{field_name.upper()}", raw)
+        self._apply_setting(field_name, value)
+        shown = ", ".join(value) if isinstance(value, tuple) else value
+        self.reply(f"⚙️ {field_name.upper()} = <code>{esc(shown)}</code> from now on, and after restarts. "
+                   f"/unset {field_name.upper()} goes back to the .env value.")
+
+    def cmd_unset(self, args, now) -> None:
+        name = args[0].lower() if args else ""
+        if name not in SETTABLE:
+            self.reply("Usage: /unset NAME. /settings lists the names.")
+            return
+        self.det.state.put(f"setting:{name.upper()}", None)
+        value = getattr(Config.from_env(self.env), name)
+        self._apply_setting(name, value)
+        shown = ", ".join(value) if isinstance(value, tuple) else value
+        self.reply(f"⚙️ {name.upper()} is back to <code>{esc(shown)}</code>.")
+
+    def cmd_settings(self, args, now) -> None:
+        lines = ["⚙️ <b>Settings you can change</b> (/set NAME value)", ""]
+        for name in SETTABLE:
+            value = getattr(self.det.cfg, name)
+            shown = ", ".join(value) if isinstance(value, tuple) else value
+            mark = " · <i>set here</i>" if self.det.state.get(f"setting:{name.upper()}") is not None else ""
+            lines.append(f"<code>{name.upper()}</code> = {esc(shown if shown != '' else '-')}{mark}")
+        self.reply(_fit("\n".join(lines)))
+
     # /help ----------------------------------------------------------------------------------
     def cmd_help(self, args, now) -> None:
         lines = ["🤖 <b>Pi-hole detector</b>", ""] + [f"/{c} - {esc(d)}" for c, d in BOT_COMMANDS]
@@ -501,6 +655,13 @@ class Bot:
         ]
         if stats.get("api_failures"):
             lines.append(f"⚠️ {stats['api_failures']} failed polls since the last report")
+        state = self.det.state
+        mute_until, quiet = state.get("bot:mute_until") or 0, state.get("bot:quiet")
+        if mute_until > now or quiet:
+            parts = [f"Muted until {esc(when(mute_until))}"] if mute_until > now else []
+            parts += [f"Quiet {esc(quiet)}" + (" (now)" if in_quiet(quiet, now) else "")] if quiet else []
+            held = len(state.get("bot:held") or [])
+            lines.append("🔕 " + " · ".join(parts) + (f" · {held} held" if held else ""))
         self.reply("\n".join(lines))
 
     # /report --------------------------------------------------------------------------------

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import clientlog
 from .bot import alert_buttons, drain, start_bot
-from .config import Config
+from .config import Config, apply_overrides
 from .rules import block_hint
 from .detector import Detector
 from .discovery import discover, nmap_options
@@ -31,6 +31,9 @@ MAX_CATCHUP = 6 * 3600
 
 def build(cfg: Config, state_path: str | None = None, alerts_path: str | None = None):
     state = State(state_path or cfg.state_db)
+    overridden = apply_overrides(cfg, state)
+    if overridden:
+        log.info("settings changed from Telegram: %s", ", ".join(overridden))
     extra = []
     if cfg.threat_file:
         with open(cfg.threat_file, encoding="utf-8") as handle:

@@ -77,17 +77,61 @@ class Config:
             raw = env.get(f.name.upper())
             if raw is None:
                 continue
-            raw = raw.strip()  # a CRLF .env leaves "\r" on every value; a token with it gets a 404
-            current = getattr(cfg, f.name)
-            if isinstance(current, bool):
-                value = raw.strip().lower() in ("1", "true", "yes", "on")
-            elif isinstance(current, int):
-                value = int(raw)
-            elif isinstance(current, float):
-                value = float(raw)
-            elif isinstance(current, tuple):
-                value = _csv(raw)
-            else:
-                value = raw
-            setattr(cfg, f.name, value)
+            setattr(cfg, f.name, parse_value(getattr(cfg, f.name), raw))
         return cfg
+
+
+def parse_value(current, raw: str):
+    """A setting's text, typed like its default. Raises ValueError for a malformed number."""
+    raw = raw.strip()  # a CRLF .env leaves "\r" on every value; a token with it gets a 404
+    if isinstance(current, bool):
+        return raw.lower() in ("1", "true", "yes", "on")
+    if isinstance(current, int):
+        return int(raw)
+    if isinstance(current, float):
+        return float(raw)
+    if isinstance(current, tuple):
+        return _csv(raw)
+    return raw
+
+
+# What /set may change from Telegram: thresholds and switches. Never paths, URLs or secrets.
+SETTABLE = (
+    "nxdomain_window", "nxdomain_threshold", "tunnel_window", "tunnel_unique_subdomains", "tunnel_long_label",
+    "tunnel_long_label_count", "tunnel_txt_count", "beacon_min_hits", "beacon_max_cv", "beacon_min_interval",
+    "beacon_max_interval", "silent_hours", "silent_min_queries", "dedup_hours", "digest_hour",
+    "push_cap_per_hour", "rotation_sync", "rotation_keep", "nmap_enabled", "nmap_exclude", "push_enabled",
+)
+BOUNDS = {"digest_hour": (0, 23), "rotation_keep": (1, 10), "push_cap_per_hour": (1, 1000)}
+
+
+def parse_setting(name: str, raw: str):
+    """(field, value) for /set NAME value. Raises ValueError with a reason the owner can read."""
+    field_name = name.strip().lower()
+    if field_name not in SETTABLE:
+        raise ValueError(f"{name.upper()} can't be changed from chat")
+    try:
+        value = parse_value(getattr(Config(), field_name), raw)
+    except ValueError:
+        raise ValueError(f"{name.upper()} must be a number") from None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        low, high = BOUNDS.get(field_name, (0, float("inf")))
+        if not low <= value <= high:
+            limit = f"between {low} and {high}" if high != float("inf") else f"{low} or more"
+            raise ValueError(f"{name.upper()} must be {limit}")
+    return field_name, value
+
+
+def apply_overrides(cfg: Config, state) -> list[str]:
+    """Put the /set values saved in state.db on top of cfg. Only SETTABLE names are ever applied."""
+    applied = []
+    for field_name in SETTABLE:
+        raw = state.get(f"setting:{field_name.upper()}")
+        if raw is None:
+            continue
+        try:
+            setattr(cfg, *parse_setting(field_name, raw))
+            applied.append(field_name.upper())
+        except ValueError:
+            continue
+    return applied
