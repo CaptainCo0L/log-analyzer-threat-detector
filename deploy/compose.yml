@@ -11,7 +11,7 @@ services:
     container_name: pihole-detector
     restart: unless-stopped
     init: true
-    mem_limit: 160m
+    mem_limit: 256m   # nmap during name discovery: a manual `names` exec peaked at 139 MiB under 160m
     # Pi-hole runs with host networking; reach its API (port 8081) through the host gateway.
     extra_hosts:
       - "host.docker.internal:host-gateway"
