@@ -82,7 +82,7 @@ A + AAAA lookups less than 2 s apart count as one event.
   placeholders (shown when it cannot see MACs, e.g. in Docker bridge mode) are ignored. Expect
   hits from **private/rotating Wi-Fi MACs** (iOS, Android, Windows): a known phone that
   rotates its address shows up as "new" (live: the iPad, 2026-10-24, HIGH). So a new
-  *locally administered* MAC is asked its own name (the same probes as `names`, IPv4,
+  *locally administered* MAC is asked its own name (the UDP probes of `names`, not nmap, IPv4,
   `ROTATION_PROBE_WAIT` 3 s). If the name matches one saved for another MAC, it is LOW
   ("rejoined on a new private Wi-Fi MAC"). No answer, a new name or a burned-in MAC stays
   HIGH. The name is saved either way. A device can claim any name over mDNS, so a spoofed

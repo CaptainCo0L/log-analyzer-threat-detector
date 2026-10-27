@@ -2,6 +2,7 @@ import sqlite3
 
 from pihole_detector.__main__ import cmd_names
 from pihole_detector.config import Config
+from pihole_detector.discovery import probe_nmap
 from pihole_detector.intel import read_client_comments
 from pihole_detector.model import Device
 from pihole_detector.names import build_names_report
@@ -120,13 +121,13 @@ def test_cmd_names_probes_only_ipv4_of_real_devices_and_logs_out(tmp_path, capsy
     ])
     probed = {}
 
-    def fake_probe(ips, wait):
-        probed.update(ips=list(ips), wait=wait)
+    def fake_probe(ips, wait, **kwargs):
+        probed.update(ips=list(ips), wait=wait, **kwargs)
         return {"192.0.2.11": {"mDNS": "tv"}}
 
     assert cmd_names(Config(gravity_db=str(gravity)), 3, api=api, probe=fake_probe) == 0
     out = capsys.readouterr().out
-    assert probed == {"ips": ["192.0.2.10", "192.0.2.11"], "wait": 3}
+    assert probed == {"ips": ["192.0.2.10", "192.0.2.11"], "wait": 3, "nmap": probe_nmap, "nmap_exclude": ()}
     assert "AswinPC" in out and f"{B}  tv" in out
     assert api.logged_out
 
@@ -153,7 +154,7 @@ def names_setup(tmp_path, comments=()):
     api = FakeApi([Device(hwaddr=A, ips=("192.0.2.10",), first_seen=T0, vendor="Acme"),
                    Device(hwaddr=B, ips=("192.0.2.11",), first_seen=T0, vendor="Acme"),
                    Device(hwaddr=C, ips=("192.0.2.12",), first_seen=T0, vendor="Sony Corporation")])
-    probe = lambda ips, wait: {"192.0.2.10": {"mDNS": "ipad", "SSDP": "upnp"}, "192.0.2.11": {"SSDP": "tv"}}
+    probe = lambda ips, wait, **_: {"192.0.2.10": {"mDNS": "ipad", "SSDP": "upnp"}, "192.0.2.11": {"SSDP": "tv"}}
     return Config(gravity_db=str(gravity), names_file=str(tmp_path / "names.json")), api, probe
 
 

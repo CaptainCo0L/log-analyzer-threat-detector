@@ -98,3 +98,8 @@ def test_relabel_falls_back_to_the_mac_inside_an_old_style_label():
     records = [{"client": f"(192.0.2.10, {A})", "address": None}, {"client": f"(192.0.2.11, {B})"}]
     out = relabel(records, {A: "Sony TV", B: "Fridge"}.get)
     assert [r["client"] for r in out] == ["Sony TV", "Fridge"]
+
+
+def test_nmap_is_the_least_trusted_probe():
+    assert best_probe({"nmap": "tplinkdeco.net", "NetBIOS": "NB"}) == ("NB", "NetBIOS")
+    assert best_probe({"nmap": "tplinkdeco.net"}) == ("tplinkdeco.net", "nmap")

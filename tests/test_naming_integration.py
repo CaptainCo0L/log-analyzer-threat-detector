@@ -68,8 +68,9 @@ class FakeProbe:
     def __init__(self, found=None, error=None):
         self.found, self.error, self.calls = found or {}, error, []
 
-    def __call__(self, ips, wait):
+    def __call__(self, ips, wait, **kwargs):
         self.calls.append((sorted(ips), wait))
+        self.kwargs = kwargs
         if self.error:
             raise self.error
         return self.found
@@ -88,6 +89,20 @@ def test_discovery_runs_on_monday_at_report_time_and_saves_the_names(make_detect
     assert det.probe.calls == [(sorted([PC_IP, IOT_IP]), det.cfg.discovery_wait)]
     assert det.names.name(PC_MAC) == "Aswins-PC"  # the better probe, not NetBIOS
     assert NameStore(tmp_path / "names.json").name(PC_MAC) == "Aswins-PC"  # and it is on disk
+
+
+def test_weekly_discovery_hands_unnamed_devices_to_nmap_unless_it_is_off(make_detector, tmp_path):
+    from pihole_detector.discovery import probe_nmap
+    det = with_store(make_detector(nmap_exclude=(IOT_IP,)), tmp_path)
+    det.probe = FakeProbe()
+    report_due(det, MONDAY_9AM)
+    det.tick(MONDAY_9AM)
+    assert det.probe.kwargs == {"nmap": probe_nmap, "nmap_exclude": (IOT_IP,)}
+    det = with_store(make_detector(nmap_enabled=False), tmp_path)
+    det.probe = FakeProbe()
+    report_due(det, MONDAY_9AM)
+    det.tick(MONDAY_9AM)
+    assert det.probe.kwargs["nmap"] is None
 
 
 def test_discovery_runs_only_once_that_day(make_detector, tmp_path):

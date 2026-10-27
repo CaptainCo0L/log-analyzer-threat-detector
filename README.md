@@ -77,7 +77,7 @@ python -m pihole_detector replay FILE   # run a JSONL fixture through the pipeli
 python -m pihole_detector test-push     # send one Telegram test message
 python -m pihole_detector digest        # send the digest now
 python -m pihole_detector report        # Markdown review of alerts.jsonl (--days 7, --file PATH); sends nothing
-python -m pihole_detector names         # suggest names for Pi-hole's devices via mDNS/SSDP/NetBIOS (--wait 8); --save keeps them
+python -m pihole_detector names         # suggest names for Pi-hole's devices via mDNS/SSDP/NetBIOS/nmap (--wait 8); --save keeps them
 ```
 
 ### Device names
@@ -95,7 +95,14 @@ shows; `alerts.jsonl` is never rewritten.
 The running service refreshes names itself: **every Monday at report time (`DISCOVERY_WEEKDAY`,
 `DIGEST_HOUR`) it probes the known devices over unicast (mDNS, SSDP, NetBIOS) and saves the
 answers, then sends that day's report.** A device that does not answer keeps its previous name. If
-discovery fails the report still goes out. The service sits on Docker's bridge network, so the
+discovery fails the report still goes out.
+
+Devices none of those probes name are then **nmapped** (`-sT` connect scan of ports
+80/443/8080/8443, `ssl-cert` and `http-title` scripts, 60 s per device, no root): an appliance's
+TLS certificate or web page often carries its name (a TP-Link Deco's certificate says
+`tplinkdeco.net`). Stock titles such as "WEB SERVICE", IPs and `localhost` are not used, and nmap
+ranks below every other probe. `NMAP_ENABLED=false` turns it off; `NMAP_EXCLUDE` lists IPs it must
+never touch. The new-device name probe never uses nmap. The service sits on Docker's bridge network, so the
 multicast Bonjour browse only works from a manual run on the host network:
 
 ```bash

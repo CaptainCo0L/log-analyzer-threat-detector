@@ -38,7 +38,7 @@ def make_detector(tmp_path):
         cfg = Config(gravity_db=str(tmp_path / "missing.db"), **cfg_overrides)
         intel = GravityIntel(tmp_path / "missing.db", "tif", "IoT", extra_threats=threats, extra_iot=iot)
         det = Detector(cfg, State(":memory:"), intel, JsonlSink(tmp_path / "alerts.jsonl"), FakeTelegram(),
-                       probe=lambda ips, wait: {})  # never touch the real network
+                       probe=lambda ips, wait, **_: {})  # never touch the real network
         det.process_devices([
             Device(hwaddr=PC_MAC, ips=(PC_IP,), first_seen=T0),
             Device(hwaddr=IOT_MAC, ips=(IOT_IP,), first_seen=T0),

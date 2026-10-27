@@ -210,3 +210,95 @@ def test_bonjour_prefers_the_more_personal_service():
                (enc("_companion-link._tcp.local"), 12, enc("Aswin's iPad._companion-link._tcp.local"))]
     port = udp_responder(lambda _req: dns_response(answers))
     assert probe_bonjour([LO], wait=1, port=port, group=LO) == {LO: "Aswin's iPad"}
+
+
+# --- nmap: TLS certificate and page title, for devices the UDP probes could not name -------------
+
+import subprocess
+
+from pihole_detector.discovery import nmap_command, parse_nmap_xml, probe_nmap
+
+
+def nmap_xml(*hosts):
+    """hosts: (ip, [(script id, output, {elem key: value})]) -> nmap -oX output."""
+    body = ""
+    for ip, scripts in hosts:
+        ports = "".join(
+            f'<port protocol="tcp" portid="{443 + i}"><state state="open"/>'
+            f'<script id="{sid}" output="{out}">'
+            + "".join(f'<table key="subject"><elem key="{k}">{v}</elem></table>' for k, v in elems.items())
+            + "</script></port>"
+            for i, (sid, out, elems) in enumerate(scripts))
+        body += f'<host><status state="up"/><address addr="{ip}" addrtype="ipv4"/><ports>{ports}</ports></host>'
+    return f'<?xml version="1.0"?><nmaprun>{body}</nmaprun>'
+
+
+DECO = ("192.168.18.136", [
+    ("http-title", "Site doesn't have a title (text/html).", {}),
+    ("ssl-cert", "Subject: commonName=tplinkdeco.net", {"commonName": "tplinkdeco.net"}),
+])
+
+
+def test_nmap_names_a_device_by_its_certificate():
+    assert parse_nmap_xml(nmap_xml(DECO)) == {"192.168.18.136": "tplinkdeco.net"}
+
+
+def test_nmap_skips_a_certificate_named_after_an_ip_localhost_or_a_number():
+    # live 2026-10-27: the Sony (Android) TV's certificate is "-4574329061925171433"
+    for cn in ("192.168.18.50", "localhost", "-4574329061925171433"):
+        host = ("192.168.18.50", [("ssl-cert", f"Subject: commonName={cn}", {"commonName": cn}),
+                                  ("http-title", "Brother HL-L2350DW", {})])
+        assert parse_nmap_xml(nmap_xml(host)) == {"192.168.18.50": "Brother HL-L2350DW"}
+
+
+def test_nmap_ignores_missing_and_generic_titles():
+    host = ("192.168.18.139", [("http-title", "WEB SERVICE", {}),
+                               ("http-title", "Site doesn't have a title (text/html).", {})])
+    assert parse_nmap_xml(nmap_xml(host)) == {}
+
+
+def test_nmap_xml_garbage_gives_nothing():
+    assert parse_nmap_xml("not xml <") == {}
+
+
+def test_nmap_command_never_needs_root():
+    argv = nmap_command(["192.168.18.136"])
+    assert argv[0] == "nmap" and "-sT" in argv and argv[-1] == "192.168.18.136"
+    assert not {"-O", "-sS", "-sU", "-A"} & set(argv)
+
+
+def test_nmap_probe_survives_nmap_missing_timing_out_or_failing():
+    def missing(*a, **k):
+        raise FileNotFoundError("nmap")
+
+    def slow(*a, **k):
+        raise subprocess.TimeoutExpired("nmap", 1)
+
+    def failed(argv, **k):
+        return subprocess.CompletedProcess(argv, 1, stdout=nmap_xml(DECO), stderr="")
+
+    for run in (missing, slow, failed):
+        assert probe_nmap(["192.168.18.136"], run=run) == {}
+
+
+def test_nmap_probe_skips_the_run_when_there_is_nothing_to_scan():
+    def run(*a, **k):
+        raise AssertionError("nmap must not run")
+
+    assert probe_nmap([], run=run) == {}
+
+
+def test_discover_sends_nmap_only_the_unanswered_and_not_excluded_ips():
+    mdns_port = udp_responder(lambda _req: dns_response([(enc(reverse_name(LO)), 12, enc("pc.local"))]))
+    ports = {"mdns": mdns_port, "netbios": udp_responder(lambda _req: None),
+             "ssdp": udp_responder(lambda _req: None)}
+    asked = []
+
+    def nmap(ips):
+        asked.extend(ips)
+        return {ip: "tplinkdeco.net" for ip in ips}
+
+    found = discover([LO, "127.0.0.2", "127.0.0.3"], wait=1, ports=ports, nmap=nmap,
+                     nmap_exclude=("127.0.0.3",))
+    assert asked == ["127.0.0.2"]
+    assert found == {LO: {"mDNS": "pc"}, "127.0.0.2": {"nmap": "tplinkdeco.net"}}

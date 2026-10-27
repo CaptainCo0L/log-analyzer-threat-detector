@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .config import Config
 from .detector import Detector
-from .discovery import discover
+from .discovery import discover, nmap_options
 from .intel import GravityIntel, read_client_comments
 from .model import Alert
 from .namestore import NameStore, best_probe, relabel
@@ -150,7 +150,7 @@ def main(argv=None) -> int:
     rep = sub.add_parser("report", help="print a Markdown review of alerts.jsonl")
     rep.add_argument("--days", type=float, default=7)
     rep.add_argument("--file", help="alerts file (default: ALERTS_PATH)")
-    nm = sub.add_parser("names", help="suggest names for Pi-hole's devices (mDNS/SSDP/NetBIOS); writes nothing")
+    nm = sub.add_parser("names", help="suggest names for Pi-hole's devices (mDNS/SSDP/NetBIOS/nmap); writes nothing")
     nm.add_argument("--wait", type=float, default=8, help="seconds to listen for replies")
     nm.add_argument("--save", action="store_true", help="store the names found, for alerts and reports to use")
     args = parser.parse_args(argv)
@@ -189,14 +189,14 @@ def utf8_stdout() -> None:
 
 
 def cmd_names(cfg: Config, wait: float, api=None, probe=discover, save: bool = False) -> int:
-    """Suggest names for Pi-hole's devices from mDNS/SSDP/NetBIOS. Writes nothing unless --save, which
+    """Suggest names for Pi-hole's devices from mDNS/SSDP/NetBIOS (and nmap). Writes nothing unless --save, which
     stores the probe names in the detector's own names file (never in Pi-hole)."""
     api = api or PiholeApi(cfg.pihole_url, cfg.pihole_password)
     try:
         devices = [d for d in api.devices() if d.is_real_mac]
     finally:
         api.logout()
-    found = probe([ip for d in devices if (ip := ipv4_of(d))], wait)
+    found = probe([ip for d in devices if (ip := ipv4_of(d))], wait, **nmap_options(cfg))
     utf8_stdout()
     print(build_names_report(devices, read_client_comments(cfg.gravity_db), found), end="")
     if save:

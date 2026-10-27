@@ -8,7 +8,7 @@ from collections import Counter
 
 from .baseline import Baseline
 from .config import Config
-from .discovery import discover
+from .discovery import discover, nmap_options
 from .domains import apex
 from .intel import DomainSet, GravityIntel
 from .names import ipv4_of
@@ -158,7 +158,7 @@ class Detector:
         ips = sorted(ip for ip in self.ip_to_mac if "." in ip)  # IPv4 only
         if not ips:
             return
-        found = self.probe(ips, self.cfg.discovery_wait)
+        found = self.probe(ips, self.cfg.discovery_wait, **nmap_options(self.cfg))
         best = {}
         for ip, evidence in found.items():
             choice = best_probe(evidence)

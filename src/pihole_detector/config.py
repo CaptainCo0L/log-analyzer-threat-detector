@@ -34,6 +34,8 @@ class Config:
     discovery_weekday: int = 0               # Monday (0-6): discovery runs just before that day's report
     discovery_wait: float = 10.0             # seconds to listen for replies
     rotation_probe_wait: float = 3.0         # a new private MAC is asked its name, to spot a rotated MAC
+    nmap_enabled: bool = True                # discovery also nmaps the devices the other probes left unnamed
+    nmap_exclude: tuple[str, ...] = ()       # IPs nmap must never touch (comma separated)
     telegram_token: str = field(default="", repr=False)
     telegram_chat_id: str = ""
     push_enabled: bool = False              # shadow mode by default

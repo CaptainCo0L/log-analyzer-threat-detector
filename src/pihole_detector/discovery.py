@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 import struct
+import subprocess
 import threading
 import time
 import urllib.request
@@ -191,8 +193,9 @@ def probe_ssdp(ips, wait, port=DEFAULT_PORTS["ssdp"], fetch=_http_get) -> dict[s
     return found
 
 
-def discover(ips, wait, ports=None, fetch=_http_get) -> dict[str, dict[str, str]]:
-    """Run the three probes side by side. Returns {ip: {source: name}} for devices that answered."""
+def discover(ips, wait, ports=None, fetch=_http_get, nmap=None, nmap_exclude=()) -> dict[str, dict[str, str]]:
+    """Run the UDP probes side by side, then `nmap` (e.g. probe_nmap) on the ips none of them named
+    and that are not in nmap_exclude. Returns {ip: {source: name}} for devices that answered."""
     ports = {**DEFAULT_PORTS, **(ports or {})}
     probes = {
         "mDNS": lambda: probe_mdns(ips, wait, ports["mdns"]),
@@ -211,6 +214,10 @@ def discover(ips, wait, ports=None, fetch=_http_get) -> dict[str, dict[str, str]
         t.start()
     for t in threads:
         t.join()
+    if nmap:
+        rest = [ip for ip in ips if ip not in results and ip not in nmap_exclude]
+        for ip, name in (nmap(rest) if rest else {}).items():
+            results.setdefault(ip, {})["nmap"] = name
     return results
 
 
@@ -260,3 +267,72 @@ def probe_bonjour(ips, wait, port=DEFAULT_PORTS["mdns"], group="224.0.0.251") ->
                 if name and (addr[0] not in best or _service_rank(target) < best[addr[0]][0]):
                     best[addr[0]] = (_service_rank(target), name)
     return {ip: name for ip, (_rank, name) in best.items()}
+
+
+# nmap, for appliances that answer none of the above: the name in their TLS certificate or web page.
+# A connect scan of a few web ports needs no root; OS detection was tried and named nothing.
+NMAP_PORTS = "80,443,8080,8443"
+NMAP_HOST_SECONDS = 60
+GENERIC_TITLES = {"web service", "login", "index", "home", "welcome", "untitled", "302 found",
+                  "301 moved permanently", "404 not found", "401 unauthorized", "403 forbidden"}
+
+
+def nmap_command(ips) -> list[str]:
+    return ["nmap", "-sT", "-Pn", "-sV", "--version-light", "-p", NMAP_PORTS,
+            "--script", "ssl-cert,http-title", "--host-timeout", f"{NMAP_HOST_SECONDS}s", "-oX", "-", *ips]
+
+
+def _cert_name(script, ip: str) -> str | None:
+    cn = next((e.text for e in script.iter("elem") if e.get("key") == "commonName" and e.text), None)
+    # an Android TV's certificate is named by a random number, which is no name at all
+    if not cn or cn.strip().lower() in ("localhost", ip) or not any(c.isalpha() for c in cn):
+        return None
+    try:
+        ipaddress.ip_address(cn.strip())
+        return None
+    except ValueError:
+        return cn.strip()
+
+
+def _title_name(script) -> str | None:
+    title = (script.get("output") or "").strip()
+    if not title or title.startswith("Site doesn't have a title") or title.lower() in GENERIC_TITLES:
+        return None
+    return title
+
+
+def parse_nmap_xml(xml: str) -> dict[str, str]:
+    """{ip: name} from `nmap -oX` output: a certificate's commonName, else a page title that says
+    something. IPs, numbers, localhost and stock titles such as "WEB SERVICE" are not names."""
+    found: dict[str, str] = {}
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return {}
+    for host in root.iter("host"):
+        ip = next((a.get("addr") for a in host.iter("address") if a.get("addrtype") == "ipv4"), None)
+        if not ip:
+            continue
+        scripts = list(host.iter("script"))
+        name = (next((n for s in scripts if s.get("id") == "ssl-cert" and (n := _cert_name(s, ip))), None)
+                or next((n for s in scripts if s.get("id") == "http-title" and (n := _title_name(s))), None))
+        if name:
+            found[ip] = name
+    return found
+
+
+def nmap_options(cfg) -> dict:
+    """discover() keywords for a full discovery run: nmap unless NMAP_ENABLED is off."""
+    return {"nmap": probe_nmap if cfg.nmap_enabled else None, "nmap_exclude": cfg.nmap_exclude}
+
+
+def probe_nmap(ips, run=subprocess.run) -> dict[str, str]:
+    """nmap the ips; {} if nmap is not installed, fails or runs past its time."""
+    if not ips:
+        return {}
+    try:
+        done = run(nmap_command(ips), capture_output=True, text=True,
+                   timeout=NMAP_HOST_SECONDS * len(ips) + 30)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    return parse_nmap_xml(done.stdout) if done.returncode == 0 else {}
