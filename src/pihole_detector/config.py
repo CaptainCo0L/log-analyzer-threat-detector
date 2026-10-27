@@ -39,6 +39,7 @@ class Config:
     rotation_sync: bool = False              # follow a rotated private MAC in Pi-hole Clients (adds/deletes!)
     rotation_keep: int = 2                   # MACs kept per device: the most recently seen ones
     client_changes_path: str = "/data/client_changes.jsonl"  # every Clients change, for clients-undo
+    pihole_changes_path: str = "/data/pihole_changes.jsonl"  # every change made from Telegram
     telegram_token: str = field(default="", repr=False)
     telegram_chat_id: str = ""
     push_enabled: bool = False              # shadow mode by default

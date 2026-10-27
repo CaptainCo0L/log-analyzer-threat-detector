@@ -8,18 +8,20 @@ Only the owner's private chat is answered: chat.id and from.id must both be TELE
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import queue
 import re
 import threading
 import time
 from collections import Counter
+from pathlib import Path
 
 from . import clientlog
 from .domains import apex
 from .namestore import MAC, mac_from_address, relabel
 from .report import build_report
-from .rotation import is_private
+from .rotation import Client, is_private
 from .sinks import RULES, SEVERITY_ICON, TELEGRAM_LIMIT, esc, when
 from .model import HIGH, LOW, MEDIUM
 
@@ -30,9 +32,19 @@ BOT_COMMANDS = [
     ("report", "Alerts of the last N days: /report 7"),
     ("devices", "Who is online now (/devices all for everyone)"),
     ("whois", "One device: /whois <name, IP or MAC>"),
+    ("block", "Block a domain and its subdomains: /block ads.example (or /block exact ...)"),
+    ("unblock", "Remove a block: /unblock ads.example"),
+    ("allow", "Allow one exact domain: /allow cdn.example (or /allow wild ...)"),
+    ("unallow", "Remove an allow: /unallow cdn.example"),
+    ("pause", "Pause blocking for N minutes (default 5, max 60)"),
+    ("resume", "Turn blocking back on"),
+    ("name", "Name a device: /name <device> <new name>"),
+    ("group", "Put a device in a group: /group <device> <group> [remove]"),
     ("help", "What I can do"),
 ]
-WRITE_COMMANDS: set[str] = set()  # commands that change something; refused when older than STALE_SECONDS
+# Commands that change something; refused when older than STALE_SECONDS.
+WRITE_COMMANDS = {"block", "unblock", "allow", "unallow", "pause", "resume", "name", "group"}
+MAX_PAUSE_MINUTES = 60
 STALE_SECONDS = 300
 ONLINE_SECONDS = 900
 MAX_REPORT_DAYS = 30
@@ -253,6 +265,209 @@ class Bot:
         self.reply(f"↩️ Undone for {esc(change['name'])}: removed <code>{change['added']['mac']}</code>, "
                    f"restored {esc(restored)}.")
         return "Undone"
+
+    # changes, as undoable lists of ops ------------------------------------------------------
+    # An op is a JSON list: ["add_domain", type, kind, domain], ["delete_domain", type, kind, domain],
+    # ["add_client" | "update_client", client, comment, groups], ["delete_client", client],
+    # ["blocking", enabled, timer]. A change runs its ops; its Undo button holds the inverse ops.
+    def _apply(self, ops: list, now: float, command: str) -> None:
+        done = []
+        try:
+            for op in ops:
+                name, *args = op
+                if name == "add_domain":
+                    self.api.add_domain(*args, comment=f"Telegram, {when(now)}")
+                elif name == "delete_domain":
+                    self.api.delete_domain(*args)
+                elif name in ("add_client", "update_client"):
+                    entry = Client(mac=args[0].lower(), client=args[0], comment=args[1], groups=tuple(args[2]))
+                    (self.api.add_client if name == "add_client" else self.api.update_client)(entry)
+                elif name == "delete_client":
+                    self.api.delete_client(args[0])
+                elif name == "blocking":
+                    self.api.set_blocking(args[0], args[1])
+                else:
+                    raise ValueError(f"unknown op {name}")
+                done.append(op)
+        finally:
+            if done:
+                with Path(self.det.cfg.pihole_changes_path).open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({"time": now, "command": command, "ops": done}) + "\n")
+
+    def _change(self, command: str, ops: list, undo: list | None, text: str, now: float,
+                undo_label: str = "↩️ Undo") -> bool:
+        try:
+            self._apply(ops, now, command)
+        except Exception as exc:
+            self.reply(f"⚠️ Pi-hole refused that: {esc(exc)}")
+            return False
+        buttons = [[self.button(undo_label, {"kind": "ops", "ops": undo, "command": "undo",
+                                             "text": "↩️ Undone."}, now)]] if undo else None
+        self.reply(text, buttons=buttons)
+        return True
+
+    def press_ops(self, payload: dict, now: float) -> str:
+        """An Undo, or a confirmed change: run the stored ops."""
+        ok = self._change(payload["command"], payload["ops"], payload.get("undo"), payload["text"], now)
+        return "Done" if ok else "Failed"
+
+    def _domain_arg(self, args, usage: str) -> tuple[str | None, str | None]:
+        """(mode, domain) from "[exact|wild] <domain>", or (None, None) after replying with usage."""
+        mode = args[0].lower() if args and args[0].lower() in ("exact", "wild") else None
+        rest = args[1:] if mode else args
+        domain = rest[0].lower().rstrip(".") if len(rest) == 1 else ""
+        if not APEX.fullmatch(domain):
+            self.reply(f"Usage: {esc(usage)}\nGive one plain domain, like <code>ads.example.com</code>: "
+                       "no wildcards, spaces or regex.")
+            return None, None
+        return mode, domain
+
+    def cmd_block(self, args, now) -> None:
+        mode, domain = self._domain_arg(args, "/block <domain>  or  /block exact <domain>")
+        if not domain:
+            return
+        if mode == "exact":
+            op, what = ["deny", "exact", domain], f"<code>{esc(domain)}</code> (that exact name)"
+        else:
+            target = apex(domain)
+            op, what = ["deny", "regex", wild_regex(target)], f"<code>{esc(target)}</code> and all its subdomains"
+        self._change(f"/block {' '.join(args)}", [["add_domain", *op]], [["delete_domain", *op]],
+                     f"🛡 Blocked {what} for everyone.", now)
+
+    def cmd_allow(self, args, now) -> None:
+        mode, domain = self._domain_arg(args, "/allow <domain>  or  /allow wild <domain>")
+        if not domain:
+            return
+        if mode == "wild":
+            target = apex(domain)
+            op, what = ["allow", "regex", wild_regex(target)], f"<code>{esc(target)}</code> and all its subdomains"
+        else:
+            op, what = ["allow", "exact", domain], f"<code>{esc(domain)}</code> (that exact name)"
+        self._change(f"/allow {' '.join(args)}", [["add_domain", *op]], [["delete_domain", *op]],
+                     f"✅ Allowed {what} for everyone.", now)
+
+    def _remove_listed(self, list_type: str, args, now) -> None:
+        """Remove every entry the bot could have added for this domain (exact and wildcard)."""
+        _, domain = self._domain_arg(args, f"/un{'block' if list_type == 'deny' else 'allow'} <domain>")
+        if not domain:
+            return
+        removed = []
+        for kind, value in (("regex", wild_regex(apex(domain))), ("exact", domain)):
+            try:
+                self._apply([["delete_domain", list_type, kind, value]], now, f"/un{list_type} {domain}")
+                removed.append(["add_domain", list_type, kind, value])
+            except Exception:
+                continue  # not on the list in that form
+        listed = "deny" if list_type == "deny" else "allow"
+        if not removed:
+            self.reply(f"<code>{esc(domain)}</code> wasn't on Pi-hole's {listed} list, as an exact name or with subdomains.")
+            return
+        undo = self.button("↩️ Undo", {"kind": "ops", "ops": removed, "command": "undo", "text": "↩️ Undone."}, now)
+        verb = "Unblocked" if list_type == "deny" else "Removed the allow for"
+        self.reply(f"{'🔓' if list_type == 'deny' else '🚫'} {verb} <code>{esc(domain)}</code>.", buttons=[[undo]])
+
+    def cmd_unblock(self, args, now) -> None:
+        self._remove_listed("deny", args, now)
+
+    def cmd_unallow(self, args, now) -> None:
+        self._remove_listed("allow", args, now)
+
+    def cmd_pause(self, args, now) -> None:
+        try:
+            minutes = int(args[0]) if args else 5
+        except ValueError:
+            minutes = 5
+        minutes = 5 if minutes < 1 else minutes
+        capped = minutes > MAX_PAUSE_MINUTES
+        minutes = min(minutes, MAX_PAUSE_MINUTES)
+        note = f" ({MAX_PAUSE_MINUTES} min is the most I'll pause)" if capped else ""
+        self._change(f"/pause {minutes}", [["blocking", False, minutes * 60]], [["blocking", True, None]],
+                     f"⏸ Blocking paused for {minutes} min{note}. Pi-hole turns it back on by itself, "
+                     f"at {esc(when(now + minutes * 60))}.", now, undo_label="▶️ Resume now")
+
+    def cmd_resume(self, args, now) -> None:
+        self._change("/resume", [["blocking", True, None]], None, "▶️ Blocking is on again.", now)
+
+    def _targets(self, query: str) -> tuple[list, str | None]:
+        """The device(s) a /name or /group means: one device, or one device on several MACs."""
+        try:
+            devices = [d for d in self.api.devices() if d.is_real_mac]
+        except Exception as exc:
+            return [], f"🚨 Couldn't ask Pi-hole for its devices ({esc(type(exc).__name__)})."
+        found = self._find(query, devices)
+        if not found:
+            return [], f"No device matches <code>{esc(query)}</code>. Try /devices all."
+        if len(found) > 1 and len({name_key(self._name(d)) for d in found}) > 1:
+            listed = "\n".join(f"• {esc(self._name(d))} - <code>{d.hwaddr}</code>" for d in found[:15])
+            return [], f"Several devices match:\n{listed}\n\nAsk again with the MAC."
+        return found, None
+
+    def cmd_name(self, args, now) -> None:
+        if len(args) < 2:
+            self.reply("Usage: /name <device> <new name>, e.g. /name 192.168.18.136 Living room AP")
+            return
+        targets, problem = self._targets(args[0])
+        if problem:
+            self.reply(problem)
+            return
+        new_name = " ".join(args[1:])[:100]
+        entries = {c.mac: c for c in self.api.clients()}
+        ops, undo = [], []
+        for dev in targets:
+            entry = entries.get(dev.hwaddr)
+            if entry:
+                ops.append(["update_client", entry.client, new_name, list(entry.groups)])
+                undo.append(["update_client", entry.client, entry.comment, list(entry.groups)])
+            else:
+                ops.append(["add_client", dev.hwaddr, new_name, [0]])
+                undo.append(["delete_client", dev.hwaddr])
+        macs = ", ".join(f"<code>{d.hwaddr}</code>" for d in targets)
+        self._change(f"/name {' '.join(args)}", ops, undo, f"🏷 Named {macs} <b>{esc(new_name)}</b> in Pi-hole Clients.", now)
+
+    def cmd_group(self, args, now) -> None:
+        remove = len(args) >= 3 and args[-1].lower() == "remove"
+        if len(args) < 2 or len(args) > 3 or (len(args) == 3 and not remove):
+            self.reply("Usage: /group <device> <group> [remove], e.g. /group 192.168.18.136 IoT")
+            return
+        groups = self.api.groups()
+        gid = next((g for g, n in groups.items() if n.casefold() == args[1].casefold()), None)
+        if gid is None:
+            self.reply(f"There's no group <code>{esc(args[1])}</code>. Pi-hole has: "
+                       f"{esc(', '.join(groups.values()))}.")
+            return
+        if remove and gid == 0:
+            self.reply("Devices always stay in Default: a client outside Default gets none of its blocklists, "
+                       "so it would silently lose all blocking.")
+            return
+        targets, problem = self._targets(args[0])
+        if problem:
+            self.reply(problem)
+            return
+        entries = {c.mac: c for c in self.api.clients()}
+        ops, undo = [], []
+        for dev in targets:
+            entry = entries.get(dev.hwaddr)
+            have = set(entry.groups) if entry else {0}
+            want = sorted(have - {gid} if remove else have | {0, gid})
+            if entry:
+                ops.append(["update_client", entry.client, entry.comment, want])
+                undo.append(["update_client", entry.client, entry.comment, list(entry.groups)])
+            elif not remove:
+                ops.append(["add_client", dev.hwaddr, self._name(dev), want])
+                undo.append(["delete_client", dev.hwaddr])
+        label, name = esc(self._name(targets[0])), esc(groups[gid])
+        if not ops:
+            self.reply(f"{label} isn't in {name}.")
+            return
+        command = f"/group {' '.join(args)}"
+        if remove:
+            confirm = self.button(f"✅ Remove from {groups[gid]}", {
+                "kind": "ops", "ops": ops, "undo": undo, "command": command,
+                "text": f"👥 Removed {label} from <b>{name}</b>."}, now, style="danger")
+            self.reply(f"Remove {label} from <b>{name}</b>? That changes which lists block things for it.",
+                       buttons=[[confirm]])
+            return
+        self._change(command, ops, undo, f"👥 Added {label} to <b>{name}</b> (and kept Default).", now)
 
     # /help ----------------------------------------------------------------------------------
     def cmd_help(self, args, now) -> None:

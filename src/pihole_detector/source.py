@@ -146,6 +146,14 @@ class PiholeApi:
         self._call("POST", "/clients", body={"client": entry.client, "comment": entry.comment,
                                              "groups": list(entry.groups)})
 
+    def update_client(self, entry: Client) -> None:
+        self._call("PUT", "/clients/" + urllib.parse.quote(entry.client, safe=""),
+                   body={"comment": entry.comment, "groups": list(entry.groups)})
+
+    def set_blocking(self, enabled: bool, timer: int | None = None) -> None:
+        """Turn blocking on or off; a timer (seconds) makes Pi-hole itself flip it back."""
+        self._call("POST", "/dns/blocking", body={"blocking": enabled, "timer": timer})
+
     def delete_client(self, client: str) -> None:
         self._call("DELETE", "/clients/" + urllib.parse.quote(client, safe=""))
 

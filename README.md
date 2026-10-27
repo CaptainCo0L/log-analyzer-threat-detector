@@ -58,6 +58,21 @@ your private chat: an update counts only when both its chat and its sender are `
 | `/devices [all]` | Devices that queried in the last 15 min, with name, IP and Pi-hole groups |
 | `/whois <name, IP or MAC>` | One device: MAC, name source, groups, top 10 domains of the last 24 h, last 5 alerts |
 
+It can also change Pi-hole (each reply has **↩️ Undo**, and every change is logged to
+`data/pihole_changes.jsonl`):
+
+| Command | Change |
+| --- | --- |
+| `/block <domain>` · `/block exact <domain>` | Deny the domain's apex and all subdomains (regex), or only that exact name |
+| `/allow <domain>` · `/allow wild <domain>` | Allow that exact name, or the apex and all subdomains |
+| `/unblock <domain>` · `/unallow <domain>` | Remove the exact and wildcard entries for that domain |
+| `/pause [minutes]` · `/resume` | Pause blocking for 1-60 min (default 5). Pi-hole's own timer turns it back on |
+| `/name <device> <name>` | Set the device's Clients comment (creates the entry in Default if it has none) |
+| `/group <device> <group> [remove]` | Add the device to a group, keeping Default. Remove asks to confirm, and Default can't be removed |
+
+Blocks and allows apply to everyone (Default group). A write command sent more than 5 minutes
+before the bot sees it (the detector was down, say) is not run; send it again.
+
 Pushed alerts carry buttons:
 - **🛡 Block `<apex>`** (only when the domain resolved) adds a Pi-hole regex deny for the apex and every
   subdomain, for everyone (Default group), the same thing `pihole --wild` does.
