@@ -1,4 +1,6 @@
-* text=auto
+# LF everywhere. git archive converts line endings like a checkout does, so with core.autocrlf a
+# Windows clone shipped CRLF files to the NAS once (every .env value ended in a carriage return).
+* text=auto eol=lf
 *.sh text eol=lf
 *.jsonl text eol=lf
 Dockerfile text eol=lf
