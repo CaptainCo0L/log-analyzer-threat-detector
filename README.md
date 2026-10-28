@@ -203,6 +203,9 @@ docker compose -f deploy/compose.yml up -d --build
 docker compose -f deploy/compose.yml run --rm detector seed --days 7
 ```
 
+To update a running install, commit and run `deploy/deploy.sh`: it backs up `data/`, replaces the code
+with `HEAD` (removed files included), rebuilds and waits for the healthcheck.
+
 `deploy/compose.yml` is written for the author's host (paths under `/mnt/Home/apps`); adjust
 the two Pi-hole paths. Notes:
 
