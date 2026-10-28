@@ -70,7 +70,7 @@ def attack_mix() -> list[dict]:
         label = random_label(rng)
         if looks_random(label, min_len=8):
             burst.append(label)
-    rows += [row(a + 300 + i * 4, f"{l}.net", "phone", reply="NXDOMAIN") for i, l in enumerate(burst)]  # nxdomain_burst
+    rows += [row(a + 300 + i * 4, f"{name}.net", "phone", reply="NXDOMAIN") for i, name in enumerate(burst)]  # nxdomain_burst
     rows += [row(a + 600 + i * 3, f"{random_label(rng, 20)}.exfil.example", "pc") for i in range(60)]  # tunneling
     rows += [row(a + 1200 + i * 60, "checkin.beacon-host.example", "pc") for i in range(12)]          # beaconing
     rows.append(row(a + 2400, "strange-host.example", "iot"))                             # iot_off_baseline

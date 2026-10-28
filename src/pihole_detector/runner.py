@@ -43,7 +43,7 @@ class Runner:
                 det.process_query(q)
             det.state.put("last_time", self.tail.mark)
             if self.failures >= cfg.fail_threshold and cfg.health_push_enabled:
-                det.delivery.send(format_up(now - self.down_since))
+                det.delivery.send(format_up(now - (self.down_since or now)))
             self.failures, self.down_since = 0, None
         except ApiError as exc:
             self.failures += 1

@@ -114,7 +114,8 @@ class PiholeApi:
         FTL returns newest first. Rather than relying on cursor/start semantics, page backwards
         by moving `until` to the oldest time seen and de-duplicating the overlap by id.
         """
-        params = {"from": f"{since:.6f}", "length": page}
+        length = page
+        params: dict[str, object] = {"from": f"{since:.6f}", "length": length}
         if until is not None:
             params["until"] = f"{until:.6f}"
         if disk:
@@ -126,13 +127,14 @@ class PiholeApi:
             fresh = [q for q in batch if q.key not in found]
             for q in fresh:
                 found[q.key] = q
-            if len(batch) < params["length"]:
+            if len(batch) < length:
                 break
             if not fresh:
                 # A full page that is entirely overlap: more rows share one timestamp than fit.
-                if params["length"] >= 100_000:
+                if length >= 100_000:
                     break
-                params["length"] *= 2
+                length *= 2
+                params["length"] = length
                 continue
             params["until"] = f"{min(q.time for q in batch):.6f}"
         return sorted(found.values(), key=lambda q: (q.time, q.id))

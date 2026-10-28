@@ -70,7 +70,7 @@ class NameStore:
 MAC = re.compile(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", re.I)
 
 
-def mac_from_address(address: str) -> str | None:
+def mac_from_address(address: str | None) -> str | None:
     """The MAC out of an alert's "ip · mac" address field, lowercased."""
     found = MAC.search(address or "")
     return found.group(0).lower() if found else None

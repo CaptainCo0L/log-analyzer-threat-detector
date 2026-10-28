@@ -82,7 +82,7 @@ def build_names_report(devices, comments: dict[str, str], found: dict[str, dict[
              "| --- | --- | --- | --- | --- | --- |"]
     for e in entries:
         mac = e["dev"].hwaddr
-        evidence = " · ".join(f"{s}: {e['evidence'][s]}" for s in SOURCES if s in e["evidence"]) or "-"
+        shown = " · ".join(f"{s}: {e['evidence'][s]}" for s in SOURCES if s in e["evidence"]) or "-"
         notes = []
         if e["ip"] == "-":
             notes.append("no IPv4 address to probe")
@@ -91,7 +91,7 @@ def build_names_report(devices, comments: dict[str, str], found: dict[str, dict[
         for value in e["evidence"].values():
             notes += [f"same name as {other}" for other in sorted(owners[value.lower()] - {mac})
                       if f"same name as {other}" not in notes]
-        lines.append(f"| {e['ip']} | {mac} | {_cell(e['name'])} | {e['source']} | {_cell(evidence)} | {'; '.join(notes)} |")
+        lines.append(f"| {e['ip']} | {mac} | {_cell(e['name'])} | {e['source']} | {_cell(shown)} | {'; '.join(notes)} |")
 
     new = [e for e in entries if e["probed"] and not e["commented"]]
     lines += ["", "## Add to Pi-hole Clients"]

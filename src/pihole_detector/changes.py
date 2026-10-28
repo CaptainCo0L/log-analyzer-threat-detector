@@ -66,19 +66,28 @@ class PiholeChanges:
             if done:
                 yearlog.append(self.cfg.pihole_changes_path, {"time": now, "command": command, "ops": done})
 
+    @property
+    def pihole(self) -> PiholeClient:
+        if self.api is None:
+            raise RuntimeError("no Pi-hole API given, so nothing may change Pi-hole")
+        return self.api
+
     def _run(self, op: list, now: float) -> None:
         name, *args = op
+        api = self.pihole
         if name == "add_domain":
-            self.api.add_domain(*args, comment=f"Telegram, {when(now)}")
+            list_type, kind, domain = args
+            api.add_domain(list_type, kind, domain, comment=f"Telegram, {when(now)}")
         elif name == "delete_domain":
-            self.api.delete_domain(*args)
+            list_type, kind, domain = args
+            api.delete_domain(list_type, kind, domain)
         elif name in ("add_client", "update_client"):
             entry = Client(mac=args[0].lower(), client=args[0], comment=args[1], groups=tuple(args[2]))
-            (self.api.add_client if name == "add_client" else self.api.update_client)(entry)
+            (api.add_client if name == "add_client" else api.update_client)(entry)
         elif name == "delete_client":
-            self.api.delete_client(args[0])
+            api.delete_client(args[0])
         elif name == "blocking":
-            self.api.set_blocking(args[0], args[1])
+            api.set_blocking(args[0], args[1])
         else:
             raise ValueError(f"unknown op {name}")
 
@@ -86,11 +95,14 @@ class PiholeChanges:
     def apply_sync(self, plan: SyncPlan, name: str, now: float) -> tuple[list[Client], str | None]:
         """Add the new MAC, then delete the old ones; (deleted, error). Raises, logging nothing, when the
         add itself fails. A failed delete stops there and is logged with its error."""
-        self.api.add_client(plan.add)
-        deleted, error = [], None
+        if plan.add is None:
+            raise ValueError(f"nothing to sync: {plan.reason}")
+        self.pihole.add_client(plan.add)
+        deleted: list[Client] = []
+        error = None
         try:
             for entry in plan.delete:
-                self.api.delete_client(entry.client)
+                self.pihole.delete_client(entry.client)
                 deleted.append(entry)
         except Exception as exc:
             error = str(exc)
@@ -114,9 +126,9 @@ class PiholeChanges:
 
     def undo_sync(self, change: dict, now: float) -> None:
         """Remove the MAC the change added, re-add the ones it removed, and log the undo."""
-        self.api.delete_client(change["added"]["client"])
+        self.pihole.delete_client(change["added"]["client"])
         for entry in change["deleted"]:
-            self.api.add_client(Client(**{**entry, "groups": tuple(entry["groups"])}))
+            self.pihole.add_client(Client(**{**entry, "groups": tuple(entry["groups"])}))
         self._log_sync({"time": now, "undo_of": change["time"]})
 
     # client_changes.jsonl is not rolled over yearly: undo has to see last year's changes too.
