@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections import Counter
-from dataclasses import asdict
-from pathlib import Path
 
 from .baseline import Baseline
-from .config import Config
+from .changes import PiholeChanges
+from .config import Config, Settings
 from .discovery import discover, nmap_options
 from .domains import apex
 from .intel import DomainSet, GravityIntel
-from .names import ipv4_of
-from .namestore import NameStore, best_probe, relabel
+from .directory import Directory
+from .names import best_probe, ipv4_of, is_ipv4
+from .namestore import NameStore
 from .model import HIGH, Alert, Device, Query
 from .rotation import format_sync, is_private, plan_sync
 from .rules import Context, Seen
@@ -23,29 +22,31 @@ from .rules.devices import IotOffBaseline, new_devices, silent_devices
 from .rules.intel_rules import DohBypass, ThreatIntelMatch
 from .rules.randomness import DgaSingle, NxdomainBurst
 from .rules.traffic import Beaconing, Tunneling
-from .bot import action_button, alert_buttons, held_summary, hold, hold_reason, is_muted
-from .sinks import JsonlSink, Telegram, build_digest, format_push
+from .delivery import Delivery
+from .alertlog import AlertLog
+from .sinks import Telegram, build_digest
 from .state import State
 
 log = logging.getLogger(__name__)
 
 
 class Detector:
-    def __init__(self, cfg: Config, state: State, intel: GravityIntel, jsonl: JsonlSink, telegram: Telegram,
+    def __init__(self, cfg: Config, state: State, intel: GravityIntel, alert_log: AlertLog, telegram: Telegram,
                  names: NameStore | None = None, probe=discover, clients_api=None):
         self.cfg = cfg
-        self.clients_api = clients_api  # PiholeApi, for rotation sync; None leaves Pi-hole alone
-        self.names = names or NameStore(cfg.names_file)
+        self.changes = PiholeChanges(cfg, clients_api)  # rotation sync; no API leaves Pi-hole alone
+        self.directory = Directory(lambda: self.intel.names, names or NameStore(cfg.names_file))
         self.probe = probe
         self.state = state
+        self.settings = Settings(cfg, state)  # first: the saved /set values apply before anything reads cfg
         self.intel = intel
-        self.jsonl = jsonl
+        self.alert_log = alert_log
         self.telegram = telegram
+        self.delivery = Delivery(cfg, state, telegram)
         self.ctx = Context(cfg=cfg, state=state, intel=intel, noisy=DomainSet(cfg.noisy_apexes),
                            baseline=Baseline(state, cfg))
         self.rules = [ThreatIntelMatch(), DohBypass(), DgaSingle(), NxdomainBurst(),
                       Tunneling(), Beaconing(), IotOffBaseline()]
-        self.ip_to_mac: dict[str, str] = {}
         self.last_seen: dict[str, float] = {}  # MAC -> Pi-hole lastQuery, from the latest device snapshot
         self.labels: dict[str, str] = {}
         self.stats: Counter = Counter()
@@ -54,17 +55,32 @@ class Detector:
         self._last_stats = 0.0
 
     # identity -----------------------------------------------------------------
-    def display_name(self, mac: str | None, ip: str | None = None) -> str | None:
-        """A human-chosen name wins: the Pi-hole Clients comment, then a name discovery found."""
-        comments = self.intel.names
-        return (mac and comments.get(mac)) or (ip and comments.get(ip)) or self.names.name(mac) or None
+    @property
+    def names(self) -> NameStore:
+        return self.directory.names
+
+    @names.setter
+    def names(self, store: NameStore) -> None:
+        self.directory.names = store
+
+    @property
+    def clients_api(self):
+        return self.changes.api
+
+    @clients_api.setter
+    def clients_api(self, api) -> None:
+        self.changes.api = api
+
+    @property
+    def ip_to_mac(self) -> dict[str, str]:
+        return self.directory.ip_to_mac
 
     def identify(self, q: Query) -> tuple[str, str, str]:
         """(ident, friendly label, address). Comment > discovered name > Pi-hole hostname > IP."""
         mac = self.ip_to_mac.get(q.client_ip)
         ident = mac or q.client_ip
         hostname = q.client_name if q.client_name and q.client_name != q.client_ip else None
-        label = self.display_name(mac or q.client_ip, q.client_ip) or hostname or q.client_ip
+        label = self.directory.name(mac, q.client_ip) or hostname or q.client_ip
         address = " · ".join(filter(None, [q.client_ip, mac]))
         self.labels[ident] = label
         return ident, label, address
@@ -93,11 +109,10 @@ class Detector:
 
     def process_devices(self, devices: list[Device], now: float) -> list[Alert]:
         self.last_seen = {dev.hwaddr: dev.last_query for dev in devices}
+        self.directory.learn(devices)
         for dev in devices:
             if dev.is_real_mac:
-                for ip in dev.ips:
-                    self.ip_to_mac[ip] = dev.hwaddr
-                self.labels[dev.hwaddr] = self.display_name(dev.hwaddr) or self.labels.get(dev.hwaddr) or dev.name or dev.hwaddr
+                self.labels[dev.hwaddr] = self.directory.label(dev)
         first_run = not self.state.get("devices_seeded", False)
         alerts = new_devices(devices, self.ctx, now, quiet=first_run, rotated_from=self.rotated_from)
         self.state.put("devices_seeded", True)
@@ -122,10 +137,8 @@ class Detector:
         self.names.update({dev.hwaddr: choice}, now)
         self.names.save()
         self.sync_rotation(dev.hwaddr, *choice, now)
-        name = choice[0]
-        old = next((mac for mac, e in self.names.entries.items()
-                    if mac != dev.hwaddr and e["name"].casefold() == name.casefold()), None)
-        return (old, name) if old else None
+        old = self.directory.previous_mac(dev.hwaddr, *choice)
+        return (old, choice[0]) if old else None
 
     def tick(self, now: float) -> list[Alert]:
         """Periodic work: pruning windows, silent devices, the daily digest."""
@@ -143,22 +156,11 @@ class Detector:
                      self.stats["queries"], self.stats["alert_HIGH"], self.stats["alert_MEDIUM"],
                      self.stats["alert_LOW"])
         self.names.reload_if_changed()
-        self.flush_held(now)
+        self.delivery.flush(now)
         if self.digests:
             self.maybe_discover(now)  # first, so the report below already carries fresh names
             self.maybe_digest(now)
         return alerts
-
-    def flush_held(self, now: float) -> bool:
-        """Once /mute or quiet hours are over: one message with everything they held back."""
-        held = self.state.get("bot:held")
-        if not held or hold_reason(self.state, now):
-            return False
-        text, buttons = held_summary(self.state, held, now)
-        self.telegram.send(text, now, capped=False, buttons=buttons)
-        self.state.put("bot:held", [])
-        self.state.put("bot:held_reason", None)
-        return True
 
     def maybe_discover(self, now: float) -> bool:
         """Once a week, at report time: ask the known devices for their names and save them."""
@@ -176,7 +178,7 @@ class Detector:
         return True
 
     def discover_names(self, now: float) -> None:
-        ips = sorted(ip for ip in self.ip_to_mac if "." in ip)  # IPv4 only
+        ips = sorted(ip for ip in self.ip_to_mac if is_ipv4(ip))
         if not ips:
             return
         found = self.probe(ips, self.cfg.discovery_wait, **nmap_options(self.cfg))
@@ -210,29 +212,20 @@ class Detector:
                 log.info("rotation sync for %s (%s): nothing done, %s", mac, name, plan.reason)
             return
         try:
-            self.clients_api.add_client(plan.add)
+            deleted, error = self.changes.apply_sync(plan, name, now)
         except Exception:
             log.exception("rotation sync for %s: adding it to Pi-hole Clients failed", mac)
             return
-        deleted, error = [], None
-        try:
-            for entry in plan.delete:
-                self.clients_api.delete_client(entry.client)
-                deleted.append(entry)
-        except Exception as exc:
-            error = str(exc)
-            log.exception("rotation sync for %s: removing an old MAC failed", mac)
-        with Path(self.cfg.client_changes_path).open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"time": now, "name": name, "added": asdict(plan.add),
-                                     "deleted": [asdict(e) for e in deleted], "error": error}) + "\n")
+        if error:
+            log.warning("rotation sync for %s: removing an old MAC failed: %s", mac, error)
         log.info("rotation sync: %s added %s, removed %s", name, mac, [e.mac for e in deleted] or "none")
         try:
             groups = self.clients_api.groups()
         except Exception:
             groups = {}
-        undo = ([[action_button(self.state, "↩️ Undo", {"kind": "undo_rotation", "time": now}, now)]]
+        undo = ([[self.delivery.button("↩️ Undo", {"kind": "undo_rotation", "time": now}, now)]]
                 if self.cfg.bot_enabled else None)
-        self.telegram.send(format_sync(name, plan.add, deleted, groups, error), now, capped=False, buttons=undo)
+        self.delivery.send(format_sync(name, plan.add, deleted, groups, error), undo)
 
     # outputs ------------------------------------------------------------------
     def emit(self, alerts: list[Alert]) -> list[Alert]:
@@ -243,14 +236,9 @@ class Detector:
                 continue
             out.append(alert)
             self.stats[f"alert_{alert.severity}"] += 1
-            self.jsonl.write(alert)
+            self.alert_log.write(alert)
             log.info("[%s] %s: %s", alert.severity, alert.rule, alert.message)
-            if alert.severity == HIGH and self.cfg.push_enabled and not is_muted(self.state, alert, alert.time):
-                if hold_reason(self.state, alert.time):
-                    hold(self.state, alert)  # /mute or quiet hours: sent as one summary when they end
-                    continue
-                buttons = alert_buttons(self.state, alert, alert.time) if self.cfg.bot_enabled else None
-                self.telegram.send(format_push(alert, hint=not buttons), alert.time, buttons=buttons)
+            self.delivery.route(alert)
         return out
 
     def maybe_digest(self, now: float, force: bool = False) -> bool:
@@ -266,14 +254,13 @@ class Detector:
         due = local.tm_hour >= self.cfg.digest_hour and self.state.get("last_digest_day") != today
         if not (due or force):
             return False
-        records = relabel(self.jsonl.since(last or 0), lambda mac: self.display_name(mac))
+        records = self.directory.relabel(self.alert_log.read(last or 0, now))
         text = build_digest(records, dict(self.stats), start=last or now, end=now)
         buttons = None
         if self.cfg.bot_enabled:
             days = max(1, round((now - (last or now)) / 86400))
-            buttons = [[action_button(self.state, "📄 Full report",
-                                      {"kind": "full_report", "days": days, "end": now}, now)]]
-        sent = self.telegram.send(text, now, capped=False, buttons=buttons)
+            buttons = [[self.delivery.button("📄 Full report", {"kind": "full_report", "days": days, "end": now}, now)]]
+        sent = self.delivery.send(text, buttons)
         # The digest doubles as the heartbeat, so leave a trace of it either way.
         log.info("digest %s: %d alert(s)", "sent" if sent else "NOT sent", len(records))
         self.state.put("last_digest", now)

@@ -7,24 +7,20 @@ Only the owner's private chat is answered: chat.id and from.id must both be TELE
 
 from __future__ import annotations
 
-import ipaddress
-import json
-import os
 import logging
 import queue
 import re
 import threading
 import time
 from collections import Counter
-from pathlib import Path
 
-from . import clientlog
-from .config import SETTABLE, Config, parse_setting
+from .changes import PiholeChanges
 from .domains import apex
-from .namestore import MAC, mac_from_address, relabel
+from .names import ipv4_of
 from .report import build_report
-from .rotation import Client, is_private
-from .sinks import RULES, SEVERITY_ICON, TELEGRAM_LIMIT, esc, when
+from .rotation import is_private
+from .delivery import APEX, MAX_MUTE, QUIET, in_quiet
+from .sinks import RULES, SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, when
 from .model import HIGH, LOW, MEDIUM
 
 log = logging.getLogger(__name__)
@@ -60,105 +56,13 @@ ONLINE_SECONDS = 900
 MAX_REPORT_DAYS = 30
 
 
-APEX = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
-
-
 def wild_regex(domain: str) -> str:
     """Pi-hole's regex for a domain and all its subdomains, as `pihole --wild` writes it."""
     return r"(\.|^)" + domain.replace(".", r"\.") + "$"
 
 
-def alert_ident(alert) -> str:
-    """The device an alert is about: dedup keys are "rule|ident[|apex]"."""
-    parts = alert.dedup.split("|")
-    return parts[1] if len(parts) > 1 else alert.client
-
-
-def mute_key(rule: str, ident: str) -> str:
-    return f"mute:{rule}|{ident}"
-
-
-def is_muted(state, alert, now: float) -> bool:
-    return (state.get(mute_key(alert.rule, alert_ident(alert))) or 0) > now
-
-
-def action_button(state, label: str, payload: dict, now: float, style: str | None = None) -> dict:
-    btn = {"text": label, "callback_data": f"a:{state.add_action(payload, now)}"}
-    if style:
-        btn["style"] = style
-    return btn
-
-
-def alert_buttons(state, alert, now: float) -> list[list[dict]]:
-    """Block (when the domain resolved), mute this rule for this device, and the NAS command to copy."""
-    rows = []
-    command = (alert.evidence or {}).get("block")
-    target = command.rsplit(" ", 1)[-1] if command else ""
-    if APEX.fullmatch(target):
-        rows.append([action_button(state, f"🛡 Block {target}", {"kind": "block", "domain": target}, now, "danger")])
-    mute = {"kind": "mute", "rule": alert.rule, "ident": alert_ident(alert), "label": alert.client}
-    rows.append([action_button(state, "🔕 Mute 24 h", {**mute, "hours": 24}, now),
-                 action_button(state, "🔕 Mute 7 d", {**mute, "hours": 168}, now)])
-    if command and len(command) <= 256:  # copy_text holds 1-256 characters
-        rows.append([{"text": "📋 Copy block command", "copy_text": {"text": command}}])
-    return rows
-
-
-QUIET = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)-([01]?\d|2[0-3]):([0-5]\d)")
-MAX_HELD = 200
-MAX_MUTE = 7 * 86400
-
-
-def in_quiet(quiet: str | None, now: float) -> bool:
-    """Is local time inside "HH:MM-HH:MM"? A range like 23:00-07:00 crosses midnight."""
-    match = QUIET.fullmatch(quiet or "")
-    if not match:
-        return False
-    h1, m1, h2, m2 = map(int, match.groups())
-    start, end = h1 * 60 + m1, h2 * 60 + m2
-    local = time.localtime(now)
-    minute = local.tm_hour * 60 + local.tm_min
-    return start <= minute < end if start <= end else minute >= start or minute < end
-
-
-def hold_reason(state, now: float) -> str | None:
-    """Why HIGH pushes are being held right now: "muted", "quiet" or None."""
-    if (state.get("bot:mute_until") or 0) > now:
-        return "muted"
-    if in_quiet(state.get("bot:quiet"), now):
-        return "quiet"
-    return None
-
-
-def hold(state, alert) -> None:
-    held = state.get("bot:held") or []
-    held.append(alert.to_dict())
-    state.put("bot:held", held[-MAX_HELD:])
-    if not state.get("bot:held_reason"):
-        state.put("bot:held_reason", hold_reason(state, alert.time))
-
-
-def held_summary(state, held: list[dict], now: float) -> tuple[str, list]:
-    """One message for everything /mute or quiet hours held back, with a Block button per domain."""
-    reason = state.get("bot:held_reason")
-    opener = "While you were muted" if reason == "muted" else "While it was quiet"
-    lines = [f"🔔 <b>{opener}: {len(held)} alert{'' if len(held) == 1 else 's'}</b>", ""]
-    for r in held[:20]:
-        title = RULES.get(r["rule"], (r["rule"], ""))[0]
-        domain = f" · <code>{esc(r['domain'])}</code>" if r.get("domain") else ""
-        lines.append(f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r.get('client'))} · "
-                     f"{esc(title)}{domain}")
-    if len(held) > 20:
-        lines.append(f"<i>+{len(held) - 20} more in the daily report</i>")
-    targets = []
-    for r in held:
-        command = (r.get("evidence") or {}).get("block") or ""
-        target = command.rsplit(" ", 1)[-1]
-        if APEX.fullmatch(target) and target not in targets:
-            targets.append(target)
-    buttons = [[action_button(state, f"🛡 Block {t}", {"kind": "block", "domain": t}, now, "danger")]
-               for t in targets[:10]]
-    return _fit("\n".join(lines)), buttons
+def _shown(value):
+    return ", ".join(value) if isinstance(value, tuple) else value
 
 
 def ago(seconds: float) -> str:
@@ -223,11 +127,12 @@ def drain(inbox: queue.Queue, bot: "Bot", state, now: float) -> None:
 
 
 class Bot:
-    def __init__(self, det, api, telegram, started: float | None = None, env=None):
+    def __init__(self, det, api, telegram, started: float | None = None):
         self.det, self.api, self.telegram = det, api, telegram
+        self.delivery = det.delivery
+        self.changes = PiholeChanges(det.cfg, api)
         self.started = started if started is not None else time.time()
         self.owner = str(det.cfg.telegram_chat_id)
-        self.env = os.environ if env is None else env  # the .env values /unset goes back to
         self._strangers: set[str] = set()
 
     # dispatch -------------------------------------------------------------------------------
@@ -274,10 +179,10 @@ class Bot:
         self.telegram.answer_callback(cb.get("id", ""), handler(payload, now) or "")
 
     def reply(self, text: str, buttons=None) -> bool:
-        return self.telegram.send(text, time.time(), capped=False, buttons=buttons)
+        return self.delivery.send(text, buttons)
 
     def button(self, label: str, payload: dict, now: float, style: str | None = None) -> dict:
-        return action_button(self.det.state, label, payload, now, style)
+        return self.delivery.button(label, payload, now, style)
 
     # alert buttons --------------------------------------------------------------------------
     def press_block(self, payload: dict, now: float) -> str:
@@ -303,7 +208,7 @@ class Bot:
 
     def press_mute(self, payload: dict, now: float) -> str:
         hours = payload["hours"]
-        self.det.state.put(mute_key(payload["rule"], payload["ident"]), now + hours * 3600)
+        self.delivery.mute(payload["rule"], payload["ident"], now + hours * 3600)
         title = RULES.get(payload["rule"], (payload["rule"], ""))[0]
         span = f"{hours // 24} d" if hours >= 48 else f"{hours} h"
         undo = self.button("↩️ Undo", {**payload, "kind": "unmute"}, now)
@@ -313,19 +218,18 @@ class Bot:
         return f"Muted for {span}"
 
     def press_unmute(self, payload: dict, now: float) -> str:
-        self.det.state.put(mute_key(payload["rule"], payload["ident"]), 0)
+        self.delivery.mute(payload["rule"], payload["ident"], 0)
         title = RULES.get(payload["rule"], (payload["rule"], ""))[0]
         self.reply(f"🔔 Unmuted <b>{esc(title)}</b> for {esc(payload['label'])}.")
         return "Unmuted"
 
     def press_undo_rotation(self, payload: dict, now: float) -> str:
-        path = self.det.cfg.client_changes_path
-        change, why_not = clientlog.pick(clientlog.read(path), payload["time"])
+        change, why_not = self.changes.pending_sync(payload["time"])
         if not change:
             self.reply(f"↩️ Not undone: {esc(why_not)}.")
             return why_not[:200]
         try:
-            clientlog.undo(change, self.api, path, now)
+            self.changes.undo_sync(change, now)
         except Exception as exc:
             self.reply(f"⚠️ Undo failed part-way: {esc(exc)}. Check Pi-hole > Clients.")
             return "Undo failed"
@@ -334,38 +238,11 @@ class Bot:
                    f"restored {esc(restored)}.")
         return "Undone"
 
-    # changes, as undoable lists of ops ------------------------------------------------------
-    # An op is a JSON list: ["add_domain", type, kind, domain], ["delete_domain", type, kind, domain],
-    # ["add_client" | "update_client", client, comment, groups], ["delete_client", client],
-    # ["blocking", enabled, timer]. A change runs its ops; its Undo button holds the inverse ops.
-    def _apply(self, ops: list, now: float, command: str) -> None:
-        done = []
-        try:
-            for op in ops:
-                name, *args = op
-                if name == "add_domain":
-                    self.api.add_domain(*args, comment=f"Telegram, {when(now)}")
-                elif name == "delete_domain":
-                    self.api.delete_domain(*args)
-                elif name in ("add_client", "update_client"):
-                    entry = Client(mac=args[0].lower(), client=args[0], comment=args[1], groups=tuple(args[2]))
-                    (self.api.add_client if name == "add_client" else self.api.update_client)(entry)
-                elif name == "delete_client":
-                    self.api.delete_client(args[0])
-                elif name == "blocking":
-                    self.api.set_blocking(args[0], args[1])
-                else:
-                    raise ValueError(f"unknown op {name}")
-                done.append(op)
-        finally:
-            if done:
-                with Path(self.det.cfg.pihole_changes_path).open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps({"time": now, "command": command, "ops": done}) + "\n")
-
+    # changes, as undoable lists of ops (see changes.py) ---------------------------------------
     def _change(self, command: str, ops: list, undo: list | None, text: str, now: float,
                 undo_label: str = "↩️ Undo") -> bool:
         try:
-            self._apply(ops, now, command)
+            self.changes.apply(ops, now, command)
         except Exception as exc:
             self.reply(f"⚠️ Pi-hole refused that: {esc(exc)}")
             return False
@@ -422,7 +299,7 @@ class Bot:
         removed = []
         for kind, value in (("regex", wild_regex(apex(domain))), ("exact", domain)):
             try:
-                self._apply([["delete_domain", list_type, kind, value]], now, f"/un{list_type} {domain}")
+                self.changes.apply([["delete_domain", list_type, kind, value]], now, f"/un{list_type} {domain}")
                 removed.append(["add_domain", list_type, kind, value])
             except Exception:
                 continue  # not on the list in that form
@@ -462,10 +339,10 @@ class Bot:
             devices = [d for d in self.api.devices() if d.is_real_mac]
         except Exception as exc:
             return [], f"🚨 Couldn't ask Pi-hole for its devices ({esc(type(exc).__name__)})."
-        found = self._find(query, devices)
+        found = self.det.directory.find(query, devices)
         if not found:
             return [], f"No device matches <code>{esc(query)}</code>. Try /devices all."
-        if len(found) > 1 and len({name_key(self._name(d)) for d in found}) > 1:
+        if len(found) > 1 and not self.det.directory.one_device(found):
             listed = "\n".join(f"• {esc(self._name(d))} - <code>{d.hwaddr}</code>" for d in found[:15])
             return [], f"Several devices match:\n{listed}\n\nAsk again with the MAC."
         return found, None
@@ -542,7 +419,7 @@ class Bot:
         match = re.fullmatch(r"(\d+)\s*([mhd])", args[0].lower()) if args else None
         seconds = int(match[1]) * {"m": 60, "h": 3600, "d": 86400}[match[2]] if match else 3600
         seconds = min(max(seconds, 60), MAX_MUTE)
-        self.det.state.put("bot:mute_until", now + seconds)
+        self.delivery.mute_all(now + seconds)
         unmute = self.button("🔔 Unmute now", {"kind": "unmute_all"}, now)
         self.reply(f"🔕 Instant alerts held until {esc(when(now + seconds))}. They're still logged, and you'll "
                    "get them in one message when it ends. Health and rotation messages still come through.",
@@ -552,27 +429,26 @@ class Bot:
         self.press_unmute_all({}, now)
 
     def press_unmute_all(self, payload: dict, now: float) -> str:
-        self.det.state.put("bot:mute_until", 0)
-        held = len(self.det.state.get("bot:held") or [])
-        quiet = " Quiet hours still apply." if hold_reason(self.det.state, now) else ""
+        self.delivery.mute_all(0)
+        held = self.delivery.held
+        quiet = " Quiet hours still apply." if self.delivery.hold_reason(now) else ""
         self.reply(f"🔔 Unmuted.{quiet}" + (f" The {held} held alert{'s' if held != 1 else ''} follow." if held and not quiet else ""))
         return "Unmuted"
 
     def cmd_quiet(self, args, now) -> None:
-        state = self.det.state
         if not args:
-            current = state.get("bot:quiet")
+            current = self.delivery.quiet
             self.reply(f"Quiet hours: {esc(current) if current else 'off'}. Set with /quiet 23:00-07:00, "
                        "or /quiet off.")
             return
         if args[0].lower() == "off":
-            state.put("bot:quiet", None)
+            self.delivery.set_quiet(None)
             self.reply("🔔 Quiet hours off.")
             return
         if not QUIET.fullmatch(args[0]):
             self.reply("Usage: /quiet HH:MM-HH:MM (24-hour, e.g. /quiet 23:00-07:00) or /quiet off")
             return
-        state.put("bot:quiet", args[0])
+        self.delivery.set_quiet(args[0])
         self.reply(f"🌙 Quiet hours {esc(args[0])}: instant alerts in that window are held and sent together "
                    "when it ends. Health and rotation messages still come through.")
 
@@ -582,46 +458,35 @@ class Bot:
             return
         self.cmd_set(["PUSH_ENABLED", "true" if args[0].lower() == "on" else "false"], now)
 
-    def _apply_setting(self, field_name: str, value) -> None:
-        setattr(self.det.cfg, field_name, value)
-        if field_name == "push_cap_per_hour":
-            self.telegram.cap = value  # Telegram keeps its own copy of the cap
-
     def cmd_set(self, args, now) -> None:
         if len(args) < 2:
             self.reply("Usage: /set NAME value, e.g. /set NXDOMAIN_THRESHOLD 30. /settings lists the names.")
             return
-        raw = " ".join(args[1:])
+        name = args[0].upper()
         try:
-            field_name, value = parse_setting(args[0], raw)
+            value = self.det.settings.set(name, " ".join(args[1:]))
         except ValueError as exc:
             self.reply(f"⚠️ {esc(exc)}. /settings lists what can be changed.")
             return
-        self.det.state.put(f"setting:{field_name.upper()}", raw)
-        self._apply_setting(field_name, value)
-        shown = ", ".join(value) if isinstance(value, tuple) else value
-        self.reply(f"⚙️ {field_name.upper()} = <code>{esc(shown)}</code> from now on, and after restarts. "
-                   f"/unset {field_name.upper()} goes back to the .env value.")
+        self.reply(f"⚙️ {name} = <code>{esc(_shown(value))}</code> from now on, and after restarts. "
+                   f"/unset {name} goes back to the .env value.")
 
     def cmd_unset(self, args, now) -> None:
-        name = args[0].lower() if args else ""
-        if name not in SETTABLE:
+        name = args[0].upper() if args else ""
+        try:
+            value = self.det.settings.unset(name)
+        except ValueError:
             self.reply("Usage: /unset NAME. /settings lists the names.")
             return
-        self.det.state.put(f"setting:{name.upper()}", None)
-        value = getattr(Config.from_env(self.env), name)
-        self._apply_setting(name, value)
-        shown = ", ".join(value) if isinstance(value, tuple) else value
-        self.reply(f"⚙️ {name.upper()} is back to <code>{esc(shown)}</code>.")
+        self.reply(f"⚙️ {name} is back to <code>{esc(_shown(value))}</code>.")
 
     def cmd_settings(self, args, now) -> None:
         lines = ["⚙️ <b>Settings you can change</b> (/set NAME value)", ""]
-        for name in SETTABLE:
-            value = getattr(self.det.cfg, name)
-            shown = ", ".join(value) if isinstance(value, tuple) else value
-            mark = " · <i>set here</i>" if self.det.state.get(f"setting:{name.upper()}") is not None else ""
-            lines.append(f"<code>{name.upper()}</code> = {esc(shown if shown != '' else '-')}{mark}")
-        self.reply(_fit("\n".join(lines)))
+        for name, value, set_here in self.det.settings.items():
+            shown = _shown(value)
+            mark = " · <i>set here</i>" if set_here else ""
+            lines.append(f"<code>{name}</code> = {esc(shown if shown != '' else '-')}{mark}")
+        self.reply(fit("\n".join(lines)))
 
     # /help ----------------------------------------------------------------------------------
     def cmd_help(self, args, now) -> None:
@@ -655,20 +520,19 @@ class Bot:
         ]
         if stats.get("api_failures"):
             lines.append(f"⚠️ {stats['api_failures']} failed polls since the last report")
-        state = self.det.state
-        mute_until, quiet = state.get("bot:mute_until") or 0, state.get("bot:quiet")
+        mute_until, quiet = self.delivery.mute_until, self.delivery.quiet
         if mute_until > now or quiet:
             parts = [f"Muted until {esc(when(mute_until))}"] if mute_until > now else []
             parts += [f"Quiet {esc(quiet)}" + (" (now)" if in_quiet(quiet, now) else "")] if quiet else []
-            held = len(state.get("bot:held") or [])
+            held = self.delivery.held
             lines.append("🔕 " + " · ".join(parts) + (f" · {held} held" if held else ""))
         self.reply("\n".join(lines))
 
     # /report --------------------------------------------------------------------------------
     def _records(self, days: float, now: float) -> list[dict]:
         start = now - days * 86400
-        records = [r for r in self.det.jsonl.since(start) if r.get("time", 0) <= now]
-        return relabel(records, lambda mac: self.det.display_name(mac))
+        records = self.det.alert_log.read(start, now)
+        return self.det.directory.relabel(records)
 
     def cmd_report(self, args, now) -> None:
         try:
@@ -713,8 +577,7 @@ class Bot:
             return {}, {}
 
     def _name(self, dev) -> str:
-        ip = next((i for i in dev.ips if "." in i), None)
-        return self.det.display_name(dev.hwaddr, ip) or dev.name or (f"{dev.vendor} device" if dev.vendor else dev.hwaddr)
+        return self.det.directory.label(dev)
 
     def cmd_devices(self, args, now) -> None:
         try:
@@ -729,39 +592,16 @@ class Bot:
         shown = devices if show_all else online
         lines = [f"📶 <b>{len(online)} online</b>" + (f" · {len(devices)} known" if show_all else ""), ""]
         for d in shown:
-            ip = next((i for i in d.ips if "." in i), "-")
+            ip = ipv4_of(d) or "-"
             member = ", ".join(names.get(g, str(g)) for g in groups.get(d.hwaddr, ())) or "no Clients entry"
             seen = "now" if now - d.last_query <= ONLINE_SECONDS else f"{ago(now - d.last_query)} ago"
             lines.append(f"• <b>{esc(self._name(d))}</b> - {esc(ip)} · {esc(member)} · {seen}")
         offline = len(devices) - len(online)
         if offline and not show_all:
             lines += ["", f"<i>{offline} offline (/devices all)</i>"]
-        self.reply(_fit("\n".join(lines)))
+        self.reply(fit("\n".join(lines)))
 
     # /whois ---------------------------------------------------------------------------------
-    def _find(self, query: str, devices) -> list:
-        q = query.strip().lower()
-        if MAC.fullmatch(q):
-            return [d for d in devices if d.hwaddr == q]
-        try:
-            ipaddress.ip_address(q)
-            return [d for d in devices if q in d.ips]
-        except ValueError:
-            pass
-        key = name_key(query)
-        if not key:
-            return []
-        known = {d.hwaddr: self._name_keys(d) for d in devices}
-        exact = [d for d in devices if key in known[d.hwaddr]]
-        return exact or [d for d in devices if any(key in name for name in known[d.hwaddr])]
-
-    def _name_keys(self, dev) -> set[str]:
-        """Every name a device goes by (display name, Clients comment, discovered name, Pi-hole hostname),
-        reduced to letters and digits so "Aswins ipad" finds "Aswins-iPad"."""
-        saved = self.det.names.entries.get(dev.hwaddr) or {}
-        names = (self._name(dev), self.det.intel.names.get(dev.hwaddr), saved.get("name"), dev.name)
-        return {key for name in names if (key := name_key(name))}
-
     def cmd_whois(self, args, now) -> None:
         if not args:
             self.reply("Usage: /whois <name, IP or MAC>, e.g. /whois Aswins-iPad")
@@ -771,12 +611,12 @@ class Bot:
         except Exception as exc:
             self.reply(f"🚨 Couldn't ask Pi-hole for its devices ({esc(type(exc).__name__)}).")
             return
-        found = self._find(" ".join(args), devices)
+        found = self.det.directory.find(" ".join(args), devices)
         if not found:
             self.reply(f"No device matches <code>{esc(' '.join(args))}</code>. Try /devices all.")
             return
         found.sort(key=lambda d: -d.last_query)
-        if len(found) > 1 and len({name_key(self._name(d)) for d in found}) == 1:
+        if len(found) > 1 and self.det.directory.one_device(found):
             # One device on several private MACs: show the one in use, mention the others.
             self.reply(self._whois(found[0], now, others=found[1:]))
             return
@@ -788,11 +628,8 @@ class Bot:
 
     def _whois(self, dev, now: float, others=()) -> str:
         mac = dev.hwaddr
-        ip = next((i for i in dev.ips if "." in i), None)
-        comment = self.det.intel.names.get(mac) or (self.det.intel.names.get(ip) if ip else None)
-        saved = self.det.names.entries.get(mac)
-        source = ("Clients comment" if comment else f"discovered ({saved['source']})" if saved
-                  else "Pi-hole hostname" if dev.name else "vendor guess")
+        ip = ipv4_of(dev)
+        source = self.det.directory.source(dev)
         groups, names = self._groups_by_mac()
         member = ", ".join(names.get(g, str(g)) for g in groups.get(mac, ())) or "no Clients entry"
         lines = [
@@ -814,19 +651,9 @@ class Bot:
                 lines += [f"{i}. <code>{esc(d)}</code> - {n:,}" for i, (d, n) in enumerate(top, 1)] or ["none"]
             except Exception:
                 log.exception("telegram: reading queries for %s failed", ip)
-        recent = [r for r in self.det.jsonl.since(now - 30 * 86400) if mac_from_address(r.get("address")) == mac]
+        recent = self.det.alert_log.read(now - 30 * 86400, now, mac=mac)
         recent.sort(key=lambda r: -r.get("time", 0))
         lines += ["", "<b>Recent alerts</b>"]
         lines += [f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r['rule'])}"
                   + (f" · <code>{esc(r['domain'])}</code>" if r.get("domain") else "") for r in recent[:5]] or ["none in 30 days"]
-        return _fit("\n".join(lines))
-
-
-def name_key(text: str | None) -> str:
-    return re.sub(r"[^a-z0-9]", "", (text or "").casefold())
-
-
-def _fit(text: str) -> str:
-    if len(text) <= TELEGRAM_LIMIT:
-        return text
-    return text[: TELEGRAM_LIMIT - 20].rsplit("\n", 1)[0] + "\n<i>… cut short</i>"
+        return fit("\n".join(lines))

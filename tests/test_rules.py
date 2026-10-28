@@ -376,7 +376,7 @@ def test_every_alert_written_to_jsonl(make_detector):
     det = make_detector()
     det.process_query(q("evil-c2.example"))
     det.process_query(q("dns.google", t=1))
-    assert [r["rule"] for r in det.jsonl.since(0)] == ["ti_match", "doh_bypass"]
+    assert [r["rule"] for r in det.alert_log.read()] == ["ti_match", "doh_bypass"]
 
 
 def test_label_uses_pihole_client_comment(make_detector):

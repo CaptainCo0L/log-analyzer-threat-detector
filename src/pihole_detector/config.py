@@ -122,16 +122,48 @@ def parse_setting(name: str, raw: str):
     return field_name, value
 
 
-def apply_overrides(cfg: Config, state) -> list[str]:
-    """Put the /set values saved in state.db on top of cfg. Only SETTABLE names are ever applied."""
-    applied = []
-    for field_name in SETTABLE:
-        raw = state.get(f"setting:{field_name.upper()}")
-        if raw is None:
-            continue
-        try:
-            setattr(cfg, *parse_setting(field_name, raw))
-            applied.append(field_name.upper())
-        except ValueError:
-            continue
-    return applied
+class Settings:
+    """The SETTABLE values: what the .env file gave, with the /set values saved in state.db on top.
+
+    The only thing that changes the config while running. Everything reads the one shared Config, so a
+    change takes effect everywhere at once; nothing may keep its own copy of a SETTABLE value.
+    """
+
+    def __init__(self, cfg: Config, state):
+        self.cfg, self.state = cfg, state
+        self._env = {name: getattr(cfg, name) for name in SETTABLE}  # what /unset goes back to
+        self.applied = []  # names whose saved value was put on top, for the startup log
+        for name in SETTABLE:
+            raw = state.get(_key(name))
+            if raw is None:
+                continue
+            try:
+                setattr(cfg, *parse_setting(name, raw))
+                self.applied.append(name.upper())
+            except ValueError:
+                continue
+
+    def set(self, name: str, raw: str):
+        """Change one setting now and after restarts; returns the value. ValueError says why not."""
+        field_name, value = parse_setting(name, raw)
+        self.state.put(_key(field_name), raw)
+        setattr(self.cfg, field_name, value)
+        return value
+
+    def unset(self, name: str):
+        """Back to the .env value; returns it. ValueError for a name that can't be changed."""
+        field_name = name.strip().lower()
+        if field_name not in SETTABLE:
+            raise ValueError(f"{name.upper()} can't be changed from chat")
+        self.state.put(_key(field_name), None)
+        setattr(self.cfg, field_name, self._env[field_name])
+        return self._env[field_name]
+
+    def items(self):
+        """(NAME, value, set from chat?) for every setting /set can change."""
+        return [(name.upper(), getattr(self.cfg, name), self.state.get(_key(name)) is not None)
+                for name in SETTABLE]
+
+
+def _key(name: str) -> str:
+    return f"setting:{name.upper()}"

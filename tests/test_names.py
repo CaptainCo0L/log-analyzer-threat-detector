@@ -6,7 +6,7 @@ from pihole_detector.discovery import probe_nmap
 from pihole_detector.intel import read_client_comments
 from pihole_detector.model import Device
 from pihole_detector.names import build_names_report
-from conftest import T0
+from conftest import T0, FakePihole
 
 
 def dev(mac, ip, vendor=None):
@@ -99,22 +99,10 @@ def test_read_client_comments_lowercases_keys_and_skips_blank_comments(tmp_path)
     assert read_client_comments(tmp_path / "missing.db") == {}
 
 
-class FakeApi:
-    def __init__(self, devices):
-        self._devices = devices
-        self.logged_out = False
-
-    def devices(self):
-        return self._devices
-
-    def logout(self):
-        self.logged_out = True
-
-
 def test_cmd_names_probes_only_ipv4_of_real_devices_and_logs_out(tmp_path, capsys):
     gravity = tmp_path / "gravity.db"
     gravity_with_clients(gravity, [(A, "AswinPC")])
-    api = FakeApi([
+    api = FakePihole([
         Device(hwaddr=A, ips=("fe80::1", "192.0.2.10"), first_seen=T0),
         Device(hwaddr=B, ips=("192.0.2.11",), first_seen=T0),
         Device(hwaddr="ip-127.0.0.1", ips=("127.0.0.1",), first_seen=T0),
@@ -151,7 +139,7 @@ from pihole_detector.namestore import NameStore
 def names_setup(tmp_path, comments=()):
     gravity = tmp_path / "gravity.db"
     gravity_with_clients(gravity, list(comments))
-    api = FakeApi([Device(hwaddr=A, ips=("192.0.2.10",), first_seen=T0, vendor="Acme"),
+    api = FakePihole([Device(hwaddr=A, ips=("192.0.2.10",), first_seen=T0, vendor="Acme"),
                    Device(hwaddr=B, ips=("192.0.2.11",), first_seen=T0, vendor="Acme"),
                    Device(hwaddr=C, ips=("192.0.2.12",), first_seen=T0, vendor="Sony Corporation")])
     probe = lambda ips, wait, **_: {"192.0.2.10": {"mDNS": "ipad", "SSDP": "upnp"}, "192.0.2.11": {"SSDP": "tv"}}

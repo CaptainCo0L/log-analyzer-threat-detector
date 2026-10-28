@@ -8,14 +8,20 @@ SOURCES = ("mDNS", "Bonjour", "SSDP", "NetBIOS", "nmap")  # best first
 COMMENT = "Clients comment"
 
 
+def is_ipv4(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).version == 4
+    except ValueError:
+        return False
+
+
 def ipv4_of(device) -> str | None:
-    for ip in device.ips:
-        try:
-            if ipaddress.ip_address(ip).version == 4:
-                return ip
-        except ValueError:
-            continue
-    return None
+    return next((ip for ip in device.ips if is_ipv4(ip)), None)
+
+
+def best_probe(evidence: dict[str, str]) -> tuple[str, str] | None:
+    """(name, source) from the most trusted probe that answered, or None."""
+    return next(((evidence[s], s) for s in SOURCES if s in evidence), None)
 
 
 def _cell(text: str) -> str:
@@ -35,7 +41,7 @@ def build_names_report(devices, comments: dict[str, str], found: dict[str, dict[
         ip = ipv4_of(dev)
         comment = comments.get(dev.hwaddr) or (comments.get(ip) if ip else None)
         evidence = found.get(ip, {}) if ip else {}
-        probed = next(((evidence[s], s) for s in SOURCES if s in evidence), None)
+        probed = best_probe(evidence)
         if comment:
             name, source = comment, COMMENT
         elif probed:

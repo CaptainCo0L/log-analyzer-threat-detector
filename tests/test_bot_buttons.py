@@ -6,39 +6,10 @@ import time
 from pihole_detector.bot import Bot, wild_regex
 from pihole_detector.model import Device
 from pihole_detector.rotation import Client
-from conftest import PC_MAC, T0, q
+from conftest import PC_MAC, T0, FakePihole, q
 
 OWNER = 42
 DAY = 86400
-
-
-class FakePihole:
-    def __init__(self, fail=None):
-        self.calls, self.fail = [], fail
-        self.entries = []
-
-    def add_domain(self, list_type, kind, domain, comment=""):
-        if self.fail:
-            from pihole_detector.source import ApiError
-            raise ApiError(self.fail)
-        self.calls.append(("add_domain", list_type, kind, domain))
-
-    def delete_domain(self, list_type, kind, domain):
-        self.calls.append(("delete_domain", list_type, kind, domain))
-
-    def clients(self):
-        return list(self.entries)
-
-    def groups(self):
-        return {0: "Default", 1: "Aswin"}
-
-    def add_client(self, entry):
-        self.calls.append(("add_client", entry.mac))
-        self.entries.append(entry)
-
-    def delete_client(self, client):
-        self.calls.append(("delete_client", client.lower()))
-        self.entries = [c for c in self.entries if c.client != client]
 
 
 def press(data, update_id=2):
@@ -115,7 +86,7 @@ def test_block_adds_a_wildcard_deny_for_everyone_and_undo_removes_it(make_detect
 
 
 def test_a_failed_block_says_why(make_detector, tmp_path):
-    bot, det, api = setup(make_detector, tmp_path, api=FakePihole(fail="POST /domains/deny/regex: HTTP 400"))
+    bot, det, api = setup(make_detector, tmp_path, api=FakePihole(fail={"add_domain": "POST /domains/deny/regex: HTTP 400"}))
     det.process_query(q("evil-c2.example"))
     bot.handle(press(button(det, "Block")["callback_data"]), T0 + 5)
     toast = det.telegram.payloads("answerCallbackQuery")[-1]["text"]
@@ -130,7 +101,7 @@ def test_mute_silences_that_rule_for_that_device_only_until_it_ends(make_detecto
     pushes = len(det.telegram.messages)
     det.process_query(q("other.evil-c2.example", t=60))           # same rule, same device: silent
     assert len(det.telegram.messages) == pushes
-    assert det.jsonl.since(0)[-1]["domain"] == "other.evil-c2.example"  # but still logged for the report
+    assert det.alert_log.read()[-1]["domain"] == "other.evil-c2.example"  # but still logged for the report
     det.process_query(q("evil-c2.example", t=60, ip="192.0.2.20"))  # another device: pushed
     assert len(det.telegram.messages) == pushes + 1
     det.process_query(q("x.evil-c2.example", t=DAY + 60))         # mute over
@@ -201,7 +172,7 @@ def test_the_daily_report_offers_the_full_report(make_detector, tmp_path):
 
 
 def test_no_block_button_unless_the_target_is_a_plain_domain():
-    from pihole_detector.bot import alert_buttons
+    from pihole_detector.delivery import alert_buttons
     from pihole_detector.model import Alert
     from pihole_detector.state import State
     for command in ("sudo docker exec pihole pihole --wild *", "sudo docker exec pihole pihole --wild a;b",

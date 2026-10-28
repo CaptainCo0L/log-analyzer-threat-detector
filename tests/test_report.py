@@ -3,7 +3,8 @@ import json
 import sys
 
 from pihole_detector.__main__ import main
-from pihole_detector.report import build_report, load_records
+from pihole_detector.alertlog import AlertLog
+from pihole_detector.report import build_report
 from conftest import T0
 
 START = T0 - 3600
@@ -98,11 +99,11 @@ def write_alerts(path, records, junk=()):
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def test_load_records_keeps_only_the_window_and_counts_unreadable_lines(tmp_path):
+def test_read_keeps_only_the_window_and_counts_unreadable_lines(tmp_path):
     path = tmp_path / "alerts.jsonl"
     write_alerts(path, [rec("HIGH", "ti_match", 0), rec("LOW", "new_device", -10 * 86400)],
                  junk=["{not json", '{"no_time": true}'])
-    records, skipped = load_records(path, START, END)
+    records, skipped = AlertLog(path).read_counted(START, END)
     assert [r["rule"] for r in records] == ["ti_match"]
     assert skipped == 2
 
@@ -145,3 +146,11 @@ def test_cli_report_survives_a_legacy_console_encoding(tmp_path, monkeypatch):
 
 def test_high_section_says_none_when_there_are_no_high_alerts():
     assert section(report([rec("MEDIUM", "beaconing", 1)]), "HIGH alerts").strip() == "None."
+
+
+def test_a_line_missing_severity_is_skipped_not_crashing_the_digest(make_detector):
+    det = make_detector()
+    det.alert_log.path.write_text(json.dumps({"time": T0, "rule": "ti_match", "client": "PC"}) + "\n", encoding="utf-8")
+    assert det.alert_log.read() == []
+    det.state.put("last_digest", T0 - 86400)
+    assert det.maybe_digest(T0 + 86400, force=True)

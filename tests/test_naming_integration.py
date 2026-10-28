@@ -49,7 +49,7 @@ def test_silent_device_label_picks_up_a_saved_name(make_detector, tmp_path):
 
 
 def old_alert(det, address):
-    det.jsonl.write(Alert(time=MONDAY_9AM - 3600, severity="MEDIUM", rule="beaconing", client="(old label)",
+    det.alert_log.write(Alert(time=MONDAY_9AM - 3600, severity="MEDIUM", rule="beaconing", client="(old label)",
                           domain="tick.example", message="m", address=address, evidence={"interval_s": 60}))
 
 

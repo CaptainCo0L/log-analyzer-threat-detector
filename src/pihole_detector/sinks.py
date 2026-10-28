@@ -10,8 +10,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections import Counter, deque
-from pathlib import Path
+from collections import Counter
 
 from .model import HIGH, LOW, MEDIUM, Alert
 
@@ -166,32 +165,15 @@ def format_test(push_enabled: bool) -> str:
     return f"👋 <b>Pi-hole detector connected</b>\n\nInstant alerts: {mode}."
 
 
+def fit(text: str) -> str:
+    """Cut a message down to one Telegram message, at a line break."""
+    if len(text) <= TELEGRAM_LIMIT:
+        return text
+    return text[: TELEGRAM_LIMIT - 20].rsplit("\n", 1)[0] + "\n<i>… cut short</i>"
+
+
 def strip_html(text: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", text))
-
-
-class JsonlSink:
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-
-    def write(self, alert: Alert) -> None:
-        with open(self.path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(alert.to_dict(), sort_keys=True) + "\n")
-
-    def since(self, start: float) -> list[dict]:
-        if not self.path.exists():
-            return []
-        out = []
-        with open(self.path, encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("time", 0) >= start:
-                    out.append(record)
-        return out
 
 
 def _retry_after(exc: urllib.error.HTTPError) -> float:
@@ -230,13 +212,10 @@ class Telegram:
     SPACING = 1.0     # "In a single chat, avoid sending more than one message per second" (Bot FAQ)
     MAX_WAIT = 30.0   # longest flood-control wait honoured; longer ones drop the message
 
-    def __init__(self, token: str, chat_id: str, cap_per_hour: int, opener=urllib.request.urlopen,
+    def __init__(self, token: str, chat_id: str, opener=urllib.request.urlopen,
                  sleep=time.sleep, clock=time.monotonic):
         self.token = token
         self.chat_id = chat_id
-        self.cap = cap_per_hour
-        self.sent: deque[float] = deque()
-        self.muted = False
         self.opener = opener
         self.sleep = sleep
         self.clock = clock
@@ -348,17 +327,5 @@ class Telegram:
         """getUpdates is refused while a webhook is set."""
         return self._call("deleteWebhook", {})
 
-    def send(self, text: str, now: float, capped: bool = True, buttons=None) -> bool:
-        if capped:
-            while self.sent and self.sent[0] < now - 3600:
-                self.sent.popleft()
-            if len(self.sent) >= self.cap:
-                if not self.muted:
-                    self.muted = True
-                    self._post(f"🔕 <b>Too many alerts</b>\n\nMore than {self.cap} in an hour, so instant "
-                               "alerts are paused for up to an hour. Everything is still logged and "
-                               "will be in the daily report.")
-                return False
-            self.muted = False
-            self.sent.append(now)
+    def send(self, text: str, buttons=None) -> bool:
         return self._post(text, buttons)

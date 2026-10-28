@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from collections import Counter
 
@@ -89,25 +88,6 @@ def _high_alerts(records: list[dict]) -> list[str]:
         message = f" - {r['message']}" if r.get("message") else ""
         lines.append(f"- {_stamp(r['time'])} · {who} · {what}{message}")
     return lines
-
-
-def load_records(path, start: float, end: float) -> tuple[list[dict], int]:
-    """Records inside [start, end] plus the number of lines that could not be read."""
-    records, skipped = [], 0
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-                when = float(record["time"])
-                record["severity"], record["rule"], record["client"]
-            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-                skipped += 1
-                continue
-            if start <= when <= end:
-                records.append(record)
-    return records, skipped
 
 
 def build_report(records: list[dict], start: float, end: float, *, push_cap: int = 20, skipped: int = 0) -> str:

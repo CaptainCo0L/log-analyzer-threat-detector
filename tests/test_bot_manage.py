@@ -5,52 +5,10 @@ import json
 from pihole_detector.bot import Bot
 from pihole_detector.model import Device
 from pihole_detector.rotation import Client
-from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0
+from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0, FakePihole
 
 OWNER = 42
 TRACKER = r"(\.|^)tracker\.example$"
-
-
-class FakePihole:
-    def __init__(self):
-        self.calls = []
-        self.entries = [Client(mac=PC_MAC, client=PC_MAC.upper(), comment="AswinPC", groups=(0, 1))]
-        self.devices_ = [Device(hwaddr=PC_MAC, ips=(PC_IP,), first_seen=T0, last_query=T0, vendor="Acme"),
-                         Device(hwaddr=IOT_MAC, ips=(IOT_IP,), first_seen=T0, last_query=T0, vendor="LG")]
-        self.missing = set()  # domains whose delete gets a 404
-
-    def devices(self):
-        return list(self.devices_)
-
-    def clients(self):
-        return list(self.entries)
-
-    def groups(self):
-        return {0: "Default", 1: "Aswin", 2: "IoT"}
-
-    def add_domain(self, list_type, kind, domain, comment=""):
-        self.calls.append(("add_domain", list_type, kind, domain))
-
-    def delete_domain(self, list_type, kind, domain):
-        if domain in self.missing:
-            from pihole_detector.source import ApiError
-            raise ApiError(f"DELETE /domains/{list_type}/{kind}: HTTP 404")
-        self.calls.append(("delete_domain", list_type, kind, domain))
-
-    def set_blocking(self, enabled, timer=None):
-        self.calls.append(("blocking", enabled, timer))
-
-    def add_client(self, entry):
-        self.calls.append(("add_client", entry.client, entry.comment, entry.groups))
-        self.entries.append(entry)
-
-    def update_client(self, entry):
-        self.calls.append(("update_client", entry.client, entry.comment, entry.groups))
-        self.entries = [entry if c.client == entry.client else c for c in self.entries]
-
-    def delete_client(self, client):
-        self.calls.append(("delete_client", client))
-        self.entries = [c for c in self.entries if c.client != client]
 
 
 def message(text, date=T0, update_id=1):
@@ -68,7 +26,10 @@ def setup(make_detector, tmp_path):
     det = make_detector(telegram_chat_id=str(OWNER), bot_enabled=True,
                         pihole_changes_path=str(tmp_path / "pihole_changes.jsonl"))
     det.intel.names[PC_MAC] = "AswinPC"
-    api = FakePihole()
+    api = FakePihole(
+        devices=[Device(hwaddr=PC_MAC, ips=(PC_IP,), first_seen=T0, last_query=T0, vendor="Acme"),
+                 Device(hwaddr=IOT_MAC, ips=(IOT_IP,), first_seen=T0, last_query=T0, vendor="LG")],
+        clients=[Client(mac=PC_MAC, client=PC_MAC.upper(), comment="AswinPC", groups=(0, 1))])
     return Bot(det, api, det.telegram, started=T0), det, api
 
 

@@ -2,8 +2,9 @@
 
 import time
 
-from pihole_detector.bot import Bot, in_quiet
-from pihole_detector.config import Config, apply_overrides
+from pihole_detector.bot import Bot
+from pihole_detector.delivery import in_quiet
+from pihole_detector.config import Config, Settings
 from pihole_detector.state import State
 from conftest import T0, q
 
@@ -24,7 +25,7 @@ def press(data, update_id=2):
 
 def setup(make_detector, **cfg):
     det = make_detector(telegram_chat_id=str(OWNER), bot_enabled=True, push_enabled=True, dedup_hours=0, **cfg)
-    return Bot(det, None, det.telegram, started=T0, env={}), det
+    return Bot(det, None, det.telegram, started=T0), det
 
 
 def local(hour, minute=0):
@@ -45,7 +46,7 @@ def test_mute_holds_high_alerts_then_sends_one_summary_when_it_ends(make_detecto
     det.process_query(q("evil-c2.example", t=10))
     det.process_query(q("beacon.evil-c2.example", t=20))
     assert pushes(det) == []
-    assert len(det.jsonl.since(0)) == 2                 # still logged
+    assert len(det.alert_log.read()) == 2                 # still logged
     det.tick(T0 + 30 * 60)
     assert not any("While" in m for m in det.telegram.messages)
     det.tick(T0 + HOUR + 1)
@@ -80,7 +81,7 @@ def test_health_and_rotation_messages_are_never_held(make_detector):
     bot, det = setup(make_detector)
     bot.handle(message("/mute 1d"), T0)
     sent = len(det.telegram.messages)
-    det.telegram.send("🚨 Pi-hole is not responding", T0 + 5, capped=False)  # how cmd_run sends health
+    det.delivery.send("🚨 Pi-hole is not responding")  # how cmd_run sends health
     assert len(det.telegram.messages) == sent + 1
 
 
@@ -120,7 +121,7 @@ def test_push_off_stops_instant_alerts_and_survives_a_restart(make_detector):
     det.process_query(q("evil-c2.example", t=5))
     assert pushes(det) == [] and det.cfg.push_enabled is False
     fresh = Config(push_enabled=True)
-    apply_overrides(fresh, det.state)
+    Settings(fresh, det.state)
     assert fresh.push_enabled is False
     bot.handle(message("/push on"), T0)
     assert det.cfg.push_enabled is True
@@ -131,7 +132,7 @@ def test_set_changes_a_threshold_live_and_unset_goes_back_to_the_env_value(make_
     bot.handle(message("/set nxdomain_threshold 35"), T0)
     assert det.cfg.nxdomain_threshold == 35 and "35" in det.telegram.messages[-1]
     bot.handle(message("/set PUSH_CAP_PER_HOUR 5"), T0)
-    assert det.telegram.cap == 5  # Telegram keeps its own copy of the cap
+    assert det.cfg.push_cap_per_hour == 5  # the cap is read live: nothing keeps a copy
     bot.handle(message("/unset NXDOMAIN_THRESHOLD"), T0)
     assert det.cfg.nxdomain_threshold == Config().nxdomain_threshold
 
@@ -167,7 +168,7 @@ def test_overrides_are_applied_on_start():
     state.put("setting:NXDOMAIN_THRESHOLD", "40")
     state.put("setting:TELEGRAM_TOKEN", "evil")  # never applied, even if it got into the db
     cfg = Config(telegram_token="real")
-    apply_overrides(cfg, state)
+    Settings(cfg, state)
     assert cfg.nxdomain_threshold == 40 and cfg.telegram_token == "real"
 
 
@@ -187,3 +188,13 @@ def test_settings_commands_are_write_commands_and_in_the_menu():
     from pihole_detector.bot import BOT_COMMANDS, WRITE_COMMANDS
     names = {"mute", "unmute", "quiet", "push", "set", "unset"}
     assert names <= WRITE_COMMANDS and (names | {"settings"}) <= {c for c, _ in BOT_COMMANDS}
+
+
+def test_unset_goes_back_to_the_env_value_not_the_one_saved_before_a_restart():
+    state = State()
+    state.put("setting:NXDOMAIN_THRESHOLD", "40")
+    cfg = Config(nxdomain_threshold=25)  # what .env said
+    settings = Settings(cfg, state)
+    assert cfg.nxdomain_threshold == 40 and settings.applied == ["NXDOMAIN_THRESHOLD"]
+    assert settings.unset("nxdomain_threshold") == 25 and cfg.nxdomain_threshold == 25
+    assert state.get("setting:NXDOMAIN_THRESHOLD") is None

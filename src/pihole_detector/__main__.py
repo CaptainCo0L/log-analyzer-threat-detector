@@ -9,31 +9,32 @@ import sys
 import time
 from pathlib import Path
 
-from . import clientlog
-from .bot import alert_buttons, drain, start_bot
-from .config import Config, apply_overrides
+from .changes import PiholeChanges
+from .bot import start_bot
+from .config import Config
+from .delivery import alert_buttons
 from .rules import block_hint
 from .detector import Detector
 from .discovery import discover, nmap_options
 from .intel import GravityIntel, read_client_comments
 from .model import Alert
-from .namestore import NameStore, best_probe, relabel
-from .names import build_names_report, ipv4_of
-from .report import build_report, load_records
-from .sinks import JsonlSink, Telegram, build_digest, format_down, format_push, format_test, format_up
-from .source import ApiError, PiholeApi, Tail, read_replay
+from .directory import Directory
+from .namestore import NameStore
+from .names import best_probe, build_names_report, ipv4_of
+from .alertlog import AlertLog
+from .report import build_report
+from .runner import Runner
+from .sinks import Telegram, build_digest, format_push, format_test
+from .source import PiholeApi, read_replay
 from .state import State
 
 log = logging.getLogger("pihole_detector")
 HEARTBEAT = Path("/tmp/heartbeat")
-MAX_CATCHUP = 6 * 3600
 
 
-def build(cfg: Config, state_path: str | None = None, alerts_path: str | None = None):
+def build(cfg: Config, state_path: str | None = None, alerts_path: str | None = None, api=None):
+    """The detector. `api` lets rotation sync write to Pi-hole Clients; without it nothing changes Pi-hole."""
     state = State(state_path or cfg.state_db)
-    overridden = apply_overrides(cfg, state)
-    if overridden:
-        log.info("settings changed from Telegram: %s", ", ".join(overridden))
     extra = []
     if cfg.threat_file:
         with open(cfg.threat_file, encoding="utf-8") as handle:
@@ -41,8 +42,11 @@ def build(cfg: Config, state_path: str | None = None, alerts_path: str | None = 
     intel = GravityIntel(Path(cfg.gravity_db), cfg.threat_list_match, cfg.iot_group,
                          extra_threats=extra, extra_iot=cfg.extra_iot_clients)
     intel.refresh()
-    telegram = Telegram(cfg.telegram_token, cfg.telegram_chat_id, cfg.push_cap_per_hour)
-    return Detector(cfg, state, intel, JsonlSink(alerts_path or cfg.alerts_path), telegram)
+    telegram = Telegram(cfg.telegram_token, cfg.telegram_chat_id)
+    det = Detector(cfg, state, intel, AlertLog(alerts_path or cfg.alerts_path), telegram, clients_api=api)
+    if det.settings.applied:
+        log.info("settings changed from Telegram: %s", ", ".join(det.settings.applied))
+    return det
 
 
 def cmd_replay(cfg: Config, path: str, alerts_out: str) -> int:
@@ -57,7 +61,7 @@ def cmd_replay(cfg: Config, path: str, alerts_out: str) -> int:
             total += len(det.process_query(payload))
             total += len(det.tick(when))
     det.state.close()
-    for record in det.jsonl.since(0):
+    for record in det.alert_log.read():
         print(f"[{record['severity']}] {record['rule']}: {record['message']}")
     print(f"{total} alert(s) -> {alerts_out}", file=sys.stderr)
     return 0
@@ -90,9 +94,8 @@ def cmd_seed(cfg: Config, days: float) -> int:
 
 
 def cmd_run(cfg: Config) -> int:
-    det = build(cfg)
     api = PiholeApi(cfg.pihole_url, cfg.pihole_password)
-    det.clients_api = api  # used only when ROTATION_SYNC is on
+    det = build(cfg, api=api)  # rotation sync writes only when ROTATION_SYNC is on
     bot = start_bot(det, api)
     stopping = False
 
@@ -103,41 +106,10 @@ def cmd_run(cfg: Config) -> int:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
 
-    now = time.time()
-    tail = Tail(max(det.state.get("last_time", now - 60), now - MAX_CATCHUP))
-    failures, down_since = 0, None
-    next_devices = next_intel = 0.0
+    runner = Runner(det, api, time.time(), bot=bot, heartbeat=HEARTBEAT)
     log.info("running: push=%s poll=%.1fs threat domains=%d", cfg.push_enabled, cfg.poll_seconds, len(det.intel.threats))
-
     while not stopping:
-        now = time.time()
-        HEARTBEAT.touch()
-        try:
-            if now >= next_intel:
-                det.intel.refresh()
-                next_intel = now + cfg.intel_seconds
-            if now >= next_devices:
-                det.process_devices(api.devices(), now)
-                next_devices = now + cfg.devices_seconds
-            for q in tail.feed(api.queries_since(tail.since), now):
-                det.process_query(q)
-            det.state.put("last_time", tail.mark)
-            if failures >= cfg.fail_threshold and cfg.health_push_enabled:
-                det.telegram.send(format_up(now - down_since), now, capped=False)
-            failures, down_since = 0, None
-        except ApiError as exc:
-            failures += 1
-            det.stats["api_failures"] += 1
-            down_since = down_since or now
-            log.warning("poll failed (%d in a row): %s", failures, exc)
-            if failures == cfg.fail_threshold and cfg.health_push_enabled:
-                det.telegram.send(format_down(failures, str(exc)), now, capped=False)
-        if bot:
-            drain(bot[1], bot[0], det.state, now)
-        det.tick(now)
-        det.state.commit()
-        # Back off while failing (3, 6, 12, 24, 30 s...) instead of retrying a login every poll.
-        time.sleep(min(cfg.poll_seconds * 2 ** min(failures, 4), 30) if failures else cfg.poll_seconds)
+        time.sleep(runner.poll(time.time()))
 
     log.info("stopping")
     api.logout()
@@ -180,8 +152,7 @@ def main(argv=None) -> int:
         det.state.close()
         return 0
     if args.cmd == "test-push":
-        ok = Telegram(cfg.telegram_token, cfg.telegram_chat_id, 1).send(
-            format_test(cfg.push_enabled), time.time(), capped=False)
+        ok = Telegram(cfg.telegram_token, cfg.telegram_chat_id).send(format_test(cfg.push_enabled))
         print("sent" if ok else "FAILED (see log)")
         return 0 if ok else 1
     if args.cmd == "preview":
@@ -224,13 +195,14 @@ def cmd_names(cfg: Config, wait: float, api=None, probe=discover, save: bool = F
 
 def cmd_clients_undo(cfg: Config, api=None) -> int:
     """Reverse the newest rotation sync not yet undone: remove the MAC it added, re-add those it removed."""
-    change, why_not = clientlog.pick(clientlog.read(cfg.client_changes_path))
+    changes = PiholeChanges(cfg)
+    change, why_not = changes.pending_sync()
     if not change:
         print(why_not)
         return 1
-    api = api or PiholeApi(cfg.pihole_url, cfg.pihole_password)
+    api = changes.api = api or PiholeApi(cfg.pihole_url, cfg.pihole_password)  # only once there is work
     try:
-        clientlog.undo(change, api, cfg.client_changes_path, time.time())
+        changes.undo_sync(change, time.time())
     finally:
         if hasattr(api, "logout"):
             api.logout()
@@ -245,15 +217,14 @@ def cmd_report(cfg: Config, file: str | None, days: float) -> int:
     end = time.time()
     start = end - days * 86400
     if path.exists():
-        records, skipped = load_records(path, start, end)
+        records, skipped = AlertLog(path).read_counted(start, end)
     elif file:
         print(f"no such alerts file: {path}", file=sys.stderr)
         return 1
     else:
         records, skipped = [], 0
     comments = read_client_comments(cfg.gravity_db)
-    store = NameStore(cfg.names_file)
-    records = relabel(records, lambda mac: comments.get(mac) or store.name(mac))
+    records = Directory(lambda: comments, NameStore(cfg.names_file)).relabel(records)
     utf8_stdout()
     print(build_report(records, start, end, push_cap=cfg.push_cap_per_hour, skipped=skipped), end="")
     return 0
@@ -262,7 +233,7 @@ def cmd_report(cfg: Config, file: str | None, days: float) -> int:
 def cmd_preview(cfg: Config, tg=None, state=None) -> int:
     """Send a sample alert and a sample daily report, clearly marked as examples. With the bot on, the
     sample carries real buttons (its domain is under .example, which never resolves, so Block is harmless)."""
-    tg = tg or Telegram(cfg.telegram_token, cfg.telegram_chat_id, 1)
+    tg = tg or Telegram(cfg.telegram_token, cfg.telegram_chat_id)
     now = time.time()
     sample = Alert(
         time=now, severity="HIGH", rule="ti_match", client="Pixel 6 Pro", domain="login.evil-c2.example",
@@ -284,8 +255,8 @@ def cmd_preview(cfg: Config, tg=None, state=None) -> int:
         {"severity": "LOW", "rule": "device_silent", "client": "iPad", "evidence": {"hours": 26}, "time": now},
     ], {"queries": 31204}, start=now - 86400, end=now)
     banner = "🧪 <i>Example - not a real alert</i>\n\n"
-    ok = tg.send(banner + format_push(sample, hint=not buttons), now, capped=False, buttons=buttons)
-    ok = tg.send(banner + report, now, capped=False) and ok
+    ok = tg.send(banner + format_push(sample, hint=not buttons), buttons=buttons)
+    ok = tg.send(banner + report) and ok
     print("sent" if ok else "FAILED (see log)")
     return 0 if ok else 1
 

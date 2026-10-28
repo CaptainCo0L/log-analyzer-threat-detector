@@ -36,6 +36,13 @@ def is_private(mac: str) -> bool:
     return len(mac) == 17 and int(mac[:2], 16) & 2 == 2
 
 
+def device_macs(names: dict[str, dict], name: str, exclude: str = "") -> set[str]:
+    """The MACs saved in names.json under this mDNS/Bonjour name: one device, as far as we can tell."""
+    key = name.casefold()
+    return {mac for mac, e in names.items()
+            if mac != exclude and e.get("source") in TRUSTED and (e.get("name") or "").casefold() == key}
+
+
 def plan_sync(new_mac: str, name: str, source: str, clients: list[Client], names: dict[str, dict],
               last_seen: dict[str, float], keep: int = 2) -> SyncPlan:
     """Add `new_mac` with the device's newest entry's comment and groups; keep its `keep` most recently
@@ -47,9 +54,7 @@ def plan_sync(new_mac: str, name: str, source: str, clients: list[Client], names
         return SyncPlan(reason="not a private MAC")
     if any(c.mac == new_mac for c in clients):
         return SyncPlan(reason="already a Pi-hole client")
-    key = name.casefold()
-    device = {mac for mac, e in names.items()
-              if mac != new_mac and e.get("source") in TRUSTED and (e.get("name") or "").casefold() == key}
+    device = device_macs(names, name, exclude=new_mac)
     entries = [c for c in clients if c.mac in device]
     if not entries:
         return SyncPlan(reason=f"no Pi-hole Clients entry for {name} to copy")

@@ -8,14 +8,8 @@ import os
 import re
 from pathlib import Path
 
-from .names import SOURCES
 
 log = logging.getLogger(__name__)
-
-
-def best_probe(evidence: dict[str, str]) -> tuple[str, str] | None:
-    """(name, source) from the most trusted probe that answered, or None."""
-    return next(((evidence[s], s) for s in SOURCES if s in evidence), None)
 
 
 class NameStore:
@@ -83,6 +77,12 @@ def mac_from_address(address: str) -> str | None:
     return found.group(0).lower() if found else None
 
 
+def record_mac(record: dict) -> str | None:
+    """The MAC an alert record is about. Early alerts have no address; Pi-hole labelled such clients
+    "(ip, mac)", which still holds the MAC."""
+    return mac_from_address(record.get("address")) or mac_from_address(record.get("client"))
+
+
 def relabel(records: list[dict], lookup) -> list[dict]:
     """Copies of alert records whose `client` is the current name for their MAC.
 
@@ -91,8 +91,7 @@ def relabel(records: list[dict], lookup) -> list[dict]:
     """
     out = []
     for record in records:
-        # Early alerts have no address; Pi-hole labelled such clients "(ip, mac)", which still holds the MAC.
-        mac = mac_from_address(record.get("address")) or mac_from_address(record.get("client"))
+        mac = record_mac(record)
         name = lookup(mac) if mac else None
         out.append({**record, "client": name} if name else record)
     return out

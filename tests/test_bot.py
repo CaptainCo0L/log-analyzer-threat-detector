@@ -6,41 +6,10 @@ from pihole_detector.bot import BOT_COMMANDS, Bot, TelegramPoller, drain
 from pihole_detector.model import Alert, Device, Query
 from pihole_detector.rotation import Client
 from pihole_detector.state import State
-from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0
+from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0, FakePihole
 
 OWNER = 42
 DAY = 86400
-
-
-class FakePihole:
-    def __init__(self, devices=(), clients=(), queries=(), down=False):
-        self._devices, self._clients, self._queries, self.down = list(devices), list(clients), list(queries), down
-        self.query_calls = []
-
-    def _check(self):
-        if self.down:
-            from pihole_detector.source import ApiError
-            raise ApiError("GET /dns/blocking: connection refused")
-
-    def get(self, path, params=None):
-        self._check()
-        assert path == "/dns/blocking"
-        return {"blocking": "enabled", "timer": None}
-
-    def devices(self):
-        self._check()
-        return list(self._devices)
-
-    def clients(self):
-        return list(self._clients)
-
-    def groups(self):
-        return {0: "Default", 1: "Aswin", 2: "IoT"}
-
-    def queries_since(self, since, until=None, disk=False, page=1000, filters=None):
-        self.query_calls.append((since, filters))
-        ip = (filters or {}).get("client_ip")
-        return [q for q in self._queries if q.time >= since and (ip is None or q.client_ip == ip)]
 
 
 def message(text, chat=OWNER, sender=OWNER, date=T0, update_id=1):
@@ -185,9 +154,9 @@ def alert(t, severity="HIGH", rule="ti_match", client="AswinPC", domain="evil-c2
 def test_report_summarises_and_offers_the_full_report(make_detector):
     bot, det, _ = make_bot(make_detector)
     for i in range(3):
-        det.jsonl.write(alert(T0 - i * 3600))
-    det.jsonl.write(alert(T0 - 3600, "MEDIUM", "beaconing", domain="tick.example"))
-    det.jsonl.write(alert(T0 - 10 * DAY))  # outside the window
+        det.alert_log.write(alert(T0 - i * 3600))
+    det.alert_log.write(alert(T0 - 3600, "MEDIUM", "beaconing", domain="tick.example"))
+    det.alert_log.write(alert(T0 - 10 * DAY))  # outside the window
     bot.handle(message("/report 7"), T0)
     text = replies(det)[0]
     assert "3 high" in text.lower() and "1 medium" in text.lower() and "<blockquote expandable>" in text
@@ -212,7 +181,7 @@ def test_report_days_are_bounded_and_default_to_seven(make_detector):
 def test_a_huge_report_still_fits_one_message(make_detector):
     bot, det, _ = make_bot(make_detector)
     for i in range(400):
-        det.jsonl.write(alert(T0 - i * 60, domain=f"d{i}-{'x' * 40}.example", client=f"device-{i}"))
+        det.alert_log.write(alert(T0 - i * 60, domain=f"d{i}-{'x' * 40}.example", client=f"device-{i}"))
     bot.handle(message("/report 1"), T0)
     assert len(replies(det)[0]) <= 4096
 
@@ -243,7 +212,7 @@ def pc_queries(n_tracker=5, n_other=2):
 
 def test_whois_finds_a_device_by_name_ip_or_mac(make_detector):
     bot, det, api = make_bot(make_detector)
-    api._queries = pc_queries()
+    api.queries = pc_queries()
     for query in ("aswinpc", PC_IP, PC_MAC.upper()):
         bot.handle(message(f"/whois {query}"), T0)
     for text in replies(det):
@@ -252,9 +221,9 @@ def test_whois_finds_a_device_by_name_ip_or_mac(make_detector):
 
 def test_whois_shows_top_domains_for_that_device_only_and_recent_alerts(make_detector):
     bot, det, api = make_bot(make_detector)
-    api._queries = pc_queries()
+    api.queries = pc_queries()
     for i in range(7):
-        det.jsonl.write(alert(T0 - i * 60, domain=f"a{i}.example"))
+        det.alert_log.write(alert(T0 - i * 60, domain=f"a{i}.example"))
     bot.handle(message(f"/whois {PC_IP}"), T0)
     text = replies(det)[0]
     assert text.index("tracker.example") < text.index("news.example")  # most queried first

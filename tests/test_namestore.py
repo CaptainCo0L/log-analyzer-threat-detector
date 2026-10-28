@@ -1,7 +1,8 @@
 import json
 import os
 
-from pihole_detector.namestore import NameStore, best_probe
+from pihole_detector.names import best_probe
+from pihole_detector.namestore import NameStore
 from conftest import T0
 
 A, B = "02:00:00:00:00:0a", "02:00:00:00:00:0b"
