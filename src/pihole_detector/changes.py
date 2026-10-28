@@ -2,10 +2,9 @@
 
 Two kinds, each with its own log:
 
-- Telegram changes (/block, /name, /pause...) are lists of ops, logged to pihole_changes.jsonl. An op
-  is a JSON list: ["add_domain", type, kind, domain], ["delete_domain", type, kind, domain],
-  ["add_client" | "update_client", client, comment, groups], ["delete_client", client],
-  ["blocking", enabled, timer]. A change's Undo button holds the inverse ops.
+- Telegram changes (/block, /name, /pause...) are lists of ops, logged to pihole_changes.jsonl
+  (rolled over yearly) as an audit trail. Build ops with the functions below; an op is a JSON list
+  so a change's Undo button can hold the inverse ops.
 - Rotation sync moves a device's Clients entry onto its new private MAC, logged to
   client_changes.jsonl. `clients-undo` and the Telegram Undo button both undo it through here, so both
   follow one rule: only a device's newest change can be undone, since an older one would restore a
@@ -19,14 +18,41 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import yearlog
+from .names import same_name
 from .rotation import Client, SyncPlan
 from .sinks import when
+from .source import PiholeClient
+
+
+# Ops, built here so the op format stays in this module. Each returns a JSON-ready list.
+def add_domain(list_type: str, kind: str, domain: str) -> list:
+    return ["add_domain", list_type, kind, domain]
+
+
+def delete_domain(list_type: str, kind: str, domain: str) -> list:
+    return ["delete_domain", list_type, kind, domain]
+
+
+def set_blocking(enabled: bool, timer: int | None = None) -> list:
+    return ["blocking", enabled, timer]
+
+
+def add_client(client: str, comment: str, groups) -> list:
+    return ["add_client", client, comment, list(groups)]
+
+
+def update_client(client: str, comment: str, groups) -> list:
+    return ["update_client", client, comment, list(groups)]
+
+
+def delete_client(client: str) -> list:
+    return ["delete_client", client]
 
 
 class PiholeChanges:
-    def __init__(self, cfg, api=None):
+    def __init__(self, cfg, api: PiholeClient | None = None):
         self.cfg = cfg
-        self.api = api  # PiholeApi; None while nothing may change Pi-hole
+        self.api = api  # None while nothing may change Pi-hole
 
     # Telegram changes -----------------------------------------------------------------------
     def apply(self, ops: list, now: float, command: str) -> None:
@@ -82,8 +108,7 @@ class PiholeChanges:
         change = next((r for r in open_ if r["time"] == change_time), None)
         if change is None:
             return None, "that change was already undone"
-        name = change["name"].casefold()
-        if any(r["name"].casefold() == name and r["time"] > change["time"] for r in open_):
+        if any(same_name(r["name"], change["name"]) and r["time"] > change["time"] for r in open_):
             return None, f"there is a newer change for {change['name']}; undo that one first"
         return change, None
 

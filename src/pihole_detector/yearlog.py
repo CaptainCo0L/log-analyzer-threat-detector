@@ -35,9 +35,14 @@ def _archive(path: Path, year: int) -> Path:
     return path.with_name(f"{path.stem}-{year}{path.suffix}")
 
 
+_years: dict[Path, int | None] = {}  # live file -> the year of its first record, read once
+
+
 def append(path, record: dict, sort_keys: bool = False) -> None:
     path = Path(path)
-    year = _first_year(path)
+    if path not in _years or not path.exists():  # unseen, or removed behind our back
+        _years[path] = _first_year(path)
+    year = _years[path]
     if year is not None and year < _year(record["time"]):
         archive = _archive(path, year)
         if archive.exists():        # clock went back and forth: keep both, never overwrite
@@ -46,8 +51,11 @@ def append(path, record: dict, sort_keys: bool = False) -> None:
             path.unlink()
         else:
             path.rename(archive)
+        year = None
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=sort_keys) + "\n")
+    if year is None:
+        _years[path] = _year(record["time"])  # this record now starts the file
 
 
 def files(path, start: float = 0) -> list[Path]:

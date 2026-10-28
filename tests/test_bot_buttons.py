@@ -6,7 +6,7 @@ import time
 from pihole_detector.bot import Bot, wild_regex
 from pihole_detector.model import Device
 from pihole_detector.rotation import Client
-from conftest import PC_MAC, T0, FakePihole, q
+from conftest import T0, FakePihole, q
 
 OWNER = 42
 DAY = 86400
@@ -19,10 +19,9 @@ def press(data, update_id=2):
 
 
 def setup(make_detector, tmp_path, api=None, **cfg):
-    det = make_detector(telegram_chat_id=str(OWNER), bot_enabled=True, push_enabled=True,
-                        client_changes_path=str(tmp_path / "client_changes.jsonl"), **cfg)
     api = api or FakePihole()
-    det.clients_api = api
+    det = make_detector(telegram_chat_id=str(OWNER), bot_enabled=True, push_enabled=True, api=api,
+                        client_changes_path=str(tmp_path / "client_changes.jsonl"), **cfg)
     return Bot(det, api, det.telegram, started=T0), det, api
 
 
@@ -130,7 +129,7 @@ def rotate(det, api, new_mac=IPAD_NEW, now=T0 + 100, ip="192.0.2.31"):
 
 def rotation_setup(make_detector, tmp_path):
     bot, det, api = setup(make_detector, tmp_path, rotation_sync=True)
-    det.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS")}, T0)
+    det.directory.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS")}, T0)
     det.state.add_device(IPAD_OLD, T0)
     api.entries = [Client(mac=IPAD_OLD, client=IPAD_OLD.upper(), comment="iPad", groups=(0, 1))]
     return bot, det, api

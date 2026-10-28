@@ -7,7 +7,7 @@ import pytest
 from pihole_detector.model import Alert
 from pihole_detector.sinks import Telegram, build_digest, format_push
 from pihole_detector.source import ApiError, PiholeApi
-from conftest import FakeTelegram, T0
+from conftest import T0
 
 
 class FakeResp(io.BytesIO):

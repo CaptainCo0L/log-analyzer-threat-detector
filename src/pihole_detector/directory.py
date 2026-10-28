@@ -8,16 +8,10 @@ bot reply asks this module, so the order lives in one place.
 from __future__ import annotations
 
 import ipaddress
-import re
 
-from .names import ipv4_of
+from .names import comment_for, ipv4_of, name_key
 from .namestore import MAC, NameStore, relabel
 from .rotation import TRUSTED, device_macs
-
-
-def name_key(text: str | None) -> str:
-    """A name reduced to letters and digits, so "Aswins ipad" finds "Aswins-iPad"."""
-    return re.sub(r"[^a-z0-9]", "", (text or "").casefold())
 
 
 class Directory:
@@ -35,8 +29,7 @@ class Directory:
 
     def name(self, mac: str | None, ip: str | None = None) -> str | None:
         """A name a person or discovery chose (comment, then saved name), or None."""
-        comments = self._comments()
-        return (mac and comments.get(mac)) or (ip and comments.get(ip)) or self.names.name(mac) or None
+        return comment_for(self._comments(), mac, ip) or self.names.name(mac) or None
 
     def label(self, dev) -> str:
         """What to call a Pi-hole device: never empty."""
@@ -45,9 +38,7 @@ class Directory:
 
     def source(self, dev) -> str:
         """Where label(dev) came from, in words."""
-        ip = ipv4_of(dev)
-        comments = self._comments()
-        if comments.get(dev.hwaddr) or (ip and comments.get(ip)):
+        if comment_for(self._comments(), dev.hwaddr, ipv4_of(dev)):
             return "Clients comment"
         saved = self.names.entries.get(dev.hwaddr)
         if saved:

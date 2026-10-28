@@ -10,6 +10,8 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass, field
 
+from .names import same_name
+
 TRUSTED = ("mDNS", "Bonjour")
 DEFAULT_GROUP = 0
 UNDO = "sudo docker exec pihole-detector python -m pihole_detector clients-undo"
@@ -38,9 +40,8 @@ def is_private(mac: str) -> bool:
 
 def device_macs(names: dict[str, dict], name: str, exclude: str = "") -> set[str]:
     """The MACs saved in names.json under this mDNS/Bonjour name: one device, as far as we can tell."""
-    key = name.casefold()
     return {mac for mac, e in names.items()
-            if mac != exclude and e.get("source") in TRUSTED and (e.get("name") or "").casefold() == key}
+            if mac != exclude and e.get("source") in TRUSTED and same_name(e.get("name"), name)}
 
 
 def plan_sync(new_mac: str, name: str, source: str, clients: list[Client], names: dict[str, dict],

@@ -290,7 +290,7 @@ def test_whois_matches_part_of_a_name_and_any_name_a_device_has(make_detector):
                     name="kitchen-tablet.lan")
     bot, det = ipad_bot(make_detector, extra=[tablet])
     det.intel.names[tablet.hwaddr] = "Kitchen"
-    det.names.update({tablet.hwaddr: ("Galaxy Tab A", "mDNS")}, T0)
+    det.directory.names.update({tablet.hwaddr: ("Galaxy Tab A", "mDNS")}, T0)
     for query in ("ipad", "kitchen tablet", "galaxy tab"):  # part of a name, the hostname, the discovered name
         bot.handle(message(f"/whois {query}"), T0)
     texts = replies(det)

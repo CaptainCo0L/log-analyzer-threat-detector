@@ -25,6 +25,7 @@ from .rules.traffic import Beaconing, Tunneling
 from .delivery import Delivery
 from .alertlog import AlertLog
 from .sinks import Telegram, build_digest
+from .source import PiholeClient
 from .state import State
 
 log = logging.getLogger(__name__)
@@ -32,13 +33,13 @@ log = logging.getLogger(__name__)
 
 class Detector:
     def __init__(self, cfg: Config, state: State, intel: GravityIntel, alert_log: AlertLog, telegram: Telegram,
-                 names: NameStore | None = None, probe=discover, clients_api=None):
+                 names: NameStore | None = None, probe=discover, clients_api: PiholeClient | None = None):
         self.cfg = cfg
+        self.state = state
+        self.settings = Settings(cfg, state)  # first: the saved /set values apply before anything reads cfg
         self.changes = PiholeChanges(cfg, clients_api)  # rotation sync; no API leaves Pi-hole alone
         self.directory = Directory(lambda: self.intel.names, names or NameStore(cfg.names_file))
         self.probe = probe
-        self.state = state
-        self.settings = Settings(cfg, state)  # first: the saved /set values apply before anything reads cfg
         self.intel = intel
         self.alert_log = alert_log
         self.telegram = telegram
@@ -55,29 +56,9 @@ class Detector:
         self._last_stats = 0.0
 
     # identity -----------------------------------------------------------------
-    @property
-    def names(self) -> NameStore:
-        return self.directory.names
-
-    @names.setter
-    def names(self, store: NameStore) -> None:
-        self.directory.names = store
-
-    @property
-    def clients_api(self):
-        return self.changes.api
-
-    @clients_api.setter
-    def clients_api(self, api) -> None:
-        self.changes.api = api
-
-    @property
-    def ip_to_mac(self) -> dict[str, str]:
-        return self.directory.ip_to_mac
-
     def identify(self, q: Query) -> tuple[str, str, str]:
         """(ident, friendly label, address). Comment > discovered name > Pi-hole hostname > IP."""
-        mac = self.ip_to_mac.get(q.client_ip)
+        mac = self.directory.ip_to_mac.get(q.client_ip)
         ident = mac or q.client_ip
         hostname = q.client_name if q.client_name and q.client_name != q.client_ip else None
         label = self.directory.name(mac, q.client_ip) or hostname or q.client_ip
@@ -134,8 +115,8 @@ class Detector:
             return None
         if not choice:
             return None
-        self.names.update({dev.hwaddr: choice}, now)
-        self.names.save()
+        self.directory.names.update({dev.hwaddr: choice}, now)
+        self.directory.names.save()
         self.sync_rotation(dev.hwaddr, *choice, now)
         old = self.directory.previous_mac(dev.hwaddr, *choice)
         return (old, choice[0]) if old else None
@@ -155,7 +136,7 @@ class Detector:
             log.info("stats: %d queries, %d HIGH, %d MEDIUM, %d LOW since the last report",
                      self.stats["queries"], self.stats["alert_HIGH"], self.stats["alert_MEDIUM"],
                      self.stats["alert_LOW"])
-        self.names.reload_if_changed()
+        self.directory.names.reload_if_changed()
         self.delivery.flush(now)
         if self.digests:
             self.maybe_discover(now)  # first, so the report below already carries fresh names
@@ -178,17 +159,18 @@ class Detector:
         return True
 
     def discover_names(self, now: float) -> None:
-        ips = sorted(ip for ip in self.ip_to_mac if is_ipv4(ip))
+        ip_to_mac = self.directory.ip_to_mac
+        ips = sorted(ip for ip in ip_to_mac if is_ipv4(ip))
         if not ips:
             return
         found = self.probe(ips, self.cfg.discovery_wait, **nmap_options(self.cfg))
         best = {}
         for ip, evidence in found.items():
             choice = best_probe(evidence)
-            if choice and ip in self.ip_to_mac:
-                best[self.ip_to_mac[ip]] = choice
-        changes = self.names.update(best, now)
-        self.names.save()
+            if choice and ip in ip_to_mac:
+                best[ip_to_mac[ip]] = choice
+        changes = self.directory.names.update(best, now)
+        self.directory.names.save()
         for mac, (name, source) in best.items():
             if is_private(mac):  # one that was asleep when it joined is only found now
                 self.sync_rotation(mac, name, source, now)
@@ -199,10 +181,11 @@ class Detector:
     def sync_rotation(self, mac: str, name: str, source: str, now: float) -> None:
         """Move the device's Pi-hole Clients entry onto its new private MAC (see rotation.py). Every
         change is logged for clients-undo and sent to Telegram. A failure leaves the alert as it was."""
-        if not (self.cfg.rotation_sync and self.clients_api):
+        api = self.changes.api
+        if not (self.cfg.rotation_sync and api):
             return
         try:
-            plan = plan_sync(mac, name, source, self.clients_api.clients(), self.names.entries,
+            plan = plan_sync(mac, name, source, api.clients(), self.directory.names.entries,
                              self.last_seen, self.cfg.rotation_keep)
         except Exception:
             log.exception("rotation sync for %s: reading Pi-hole Clients failed", mac)
@@ -220,7 +203,7 @@ class Detector:
             log.warning("rotation sync for %s: removing an old MAC failed: %s", mac, error)
         log.info("rotation sync: %s added %s, removed %s", name, mac, [e.mac for e in deleted] or "none")
         try:
-            groups = self.clients_api.groups()
+            groups = api.groups()
         except Exception:
             groups = {}
         undo = ([[self.delivery.button("↩️ Undo", {"kind": "undo_rotation", "time": now}, now)]]

@@ -18,12 +18,11 @@ def entry(mac, comment="iPad", groups=(0, 1)):
 
 def ipad_detector(make_detector, tmp_path, api, answer=("Aswins-iPad", "mDNS"), **cfg):
     cfg.setdefault("rotation_sync", True)
-    det = make_detector(client_changes_path=str(tmp_path / "client_changes.jsonl"), **cfg)
-    det.names = NameStore(tmp_path / "names.json")
-    det.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS"), IPAD_OLDER: ("Aswins-iPad", "mDNS")}, T0)
+    det = make_detector(client_changes_path=str(tmp_path / "client_changes.jsonl"), api=api, **cfg)
+    det.directory.names = NameStore(tmp_path / "names.json")
+    det.directory.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS"), IPAD_OLDER: ("Aswins-iPad", "mDNS")}, T0)
     for mac in (IPAD_OLD, IPAD_OLDER):
         det.state.add_device(mac, T0)  # known MACs, so only the new one is "new"
-    det.clients_api = api
     det.probe = lambda ips, wait, **_: {NEW_IP: {answer[1]: answer[0]}}
     return det
 

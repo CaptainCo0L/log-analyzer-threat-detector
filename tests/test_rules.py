@@ -285,7 +285,7 @@ IPAD_OLD, IPAD_NEW = "02:00:00:00:00:30", "06:00:00:00:00:31"
 def test_new_private_mac_answering_with_a_known_name_is_a_rotation(make_detector):
     # live 2026-10-24: the iPad came back on a new private MAC and raised a HIGH new_device
     det = make_detector()
-    det.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS")}, T0)
+    det.directory.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS")}, T0)
     calls = []
     det.probe = lambda ips, wait: calls.append(ips) or {"192.0.2.31": {"mDNS": "aswins-ipad"}}
     new = Device(hwaddr=IPAD_NEW, ips=("192.0.2.31", "fe80::1"), first_seen=T0)
@@ -295,12 +295,12 @@ def test_new_private_mac_answering_with_a_known_name_is_a_rotation(make_detector
     assert a.rule == "new_device" and a.severity == "LOW" and det.telegram.messages == []
     assert a.client == "aswins-ipad" and a.evidence["previous_mac"] == IPAD_OLD
     assert "new private Wi-Fi MAC" in a.message
-    assert det.names.name(IPAD_NEW) == "aswins-ipad"  # saved, so later alerts carry the name
+    assert det.directory.names.name(IPAD_NEW) == "aswins-ipad"  # saved, so later alerts carry the name
 
 
 def test_new_device_stays_high_when_name_unknown_or_mac_is_burned_in(make_detector):
     det = make_detector()
-    det.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS")}, T0)
+    det.directory.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS")}, T0)
     det.probe = lambda ips, wait: {"192.0.2.31": {"mDNS": "someone-else"}, "192.0.2.32": {"mDNS": "Aswins-iPad"}}
     stranger = Device(hwaddr=IPAD_NEW, ips=("192.0.2.31",), first_seen=T0)
     # a universally administered (burned-in) MAC never rotates, whatever name it claims

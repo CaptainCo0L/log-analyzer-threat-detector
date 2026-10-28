@@ -23,13 +23,13 @@ def press(data, update_id=2):
 
 
 def setup(make_detector, tmp_path):
-    det = make_detector(telegram_chat_id=str(OWNER), bot_enabled=True,
-                        pihole_changes_path=str(tmp_path / "pihole_changes.jsonl"))
-    det.intel.names[PC_MAC] = "AswinPC"
     api = FakePihole(
         devices=[Device(hwaddr=PC_MAC, ips=(PC_IP,), first_seen=T0, last_query=T0, vendor="Acme"),
                  Device(hwaddr=IOT_MAC, ips=(IOT_IP,), first_seen=T0, last_query=T0, vendor="LG")],
         clients=[Client(mac=PC_MAC, client=PC_MAC.upper(), comment="AswinPC", groups=(0, 1))])
+    det = make_detector(telegram_chat_id=str(OWNER), bot_enabled=True, api=api,
+                        pihole_changes_path=str(tmp_path / "pihole_changes.jsonl"))
+    det.intel.names[PC_MAC] = "AswinPC"
     return Bot(det, api, det.telegram, started=T0), det, api
 
 

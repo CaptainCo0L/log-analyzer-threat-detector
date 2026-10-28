@@ -46,6 +46,13 @@ def in_quiet(quiet: str | None, now: float) -> bool:
     return start <= minute < end if start <= end else minute >= start or minute < end
 
 
+def block_target(evidence: dict | None) -> str | None:
+    """The domain an alert's block command would block, when it is a plain domain."""
+    command = (evidence or {}).get("block") or ""
+    target = command.rsplit(" ", 1)[-1]
+    return target if APEX.fullmatch(target) else None
+
+
 def action_button(state, label: str, payload: dict, now: float, style: str | None = None) -> dict:
     btn = {"text": label, "callback_data": f"a:{state.add_action(payload, now)}"}
     if style:
@@ -57,8 +64,8 @@ def alert_buttons(state, alert, now: float) -> list[list[dict]]:
     """Block (when the domain resolved), mute this rule for this device, and the NAS command to copy."""
     rows = []
     command = (alert.evidence or {}).get("block")
-    target = command.rsplit(" ", 1)[-1] if command else ""
-    if APEX.fullmatch(target):
+    target = block_target(alert.evidence)
+    if target:
         rows.append([action_button(state, f"🛡 Block {target}", {"kind": "block", "domain": target}, now, "danger")])
     mute = {"kind": "mute", "rule": alert.rule, "ident": alert_ident(alert), "label": alert.client}
     rows.append([action_button(state, "🔕 Mute 24 h", {**mute, "hours": 24}, now),
@@ -151,9 +158,8 @@ class Delivery:
             lines.append(f"<i>+{len(held) - 20} more in the daily report</i>")
         targets = []
         for r in held:
-            command = (r.get("evidence") or {}).get("block") or ""
-            target = command.rsplit(" ", 1)[-1]
-            if APEX.fullmatch(target) and target not in targets:
+            target = block_target(r.get("evidence"))
+            if target and target not in targets:
                 targets.append(target)
         buttons = [[self.button(f"🛡 Block {t}", {"kind": "block", "domain": t}, now, "danger")]
                    for t in targets[:10]]

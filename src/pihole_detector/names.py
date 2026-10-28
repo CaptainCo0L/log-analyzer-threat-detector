@@ -3,9 +3,25 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 
 SOURCES = ("mDNS", "Bonjour", "SSDP", "NetBIOS", "nmap")  # best first
 COMMENT = "Clients comment"
+
+
+def name_key(text: str | None) -> str:
+    """A name reduced to letters and digits, so "Aswins ipad" finds "Aswins-iPad"."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").casefold())
+
+
+def same_name(a: str | None, b: str | None) -> bool:
+    """Do two names mean the same device? Every "same device" check compares names this way."""
+    return bool(name_key(a)) and name_key(a) == name_key(b)
+
+
+def comment_for(comments: dict[str, str], mac: str | None, ip: str | None) -> str | None:
+    """The device's Pi-hole Clients comment: by MAC, then by IP."""
+    return (mac and comments.get(mac)) or (ip and comments.get(ip)) or None
 
 
 def is_ipv4(ip: str) -> bool:
@@ -39,7 +55,7 @@ def build_names_report(devices, comments: dict[str, str], found: dict[str, dict[
         if not dev.is_real_mac:
             continue
         ip = ipv4_of(dev)
-        comment = comments.get(dev.hwaddr) or (comments.get(ip) if ip else None)
+        comment = comment_for(comments, dev.hwaddr, ip)
         evidence = found.get(ip, {}) if ip else {}
         probed = best_probe(evidence)
         if comment:

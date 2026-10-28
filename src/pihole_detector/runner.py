@@ -13,14 +13,14 @@ from pathlib import Path
 
 from .bot import drain
 from .sinks import format_down, format_up
-from .source import ApiError, Tail
+from .source import ApiError, PiholeClient, Tail
 
 log = logging.getLogger(__name__)
 MAX_CATCHUP = 6 * 3600  # after downtime, resume at most this far back
 
 
 class Runner:
-    def __init__(self, det, api, now: float, bot=None, heartbeat: Path | None = None):
+    def __init__(self, det, api: PiholeClient, now: float, bot=None, heartbeat: Path | None = None):
         self.det, self.api, self.bot, self.heartbeat = det, api, bot, heartbeat
         self.tail = Tail(max(det.state.get("last_time", now - 60), now - MAX_CATCHUP))
         self.failures = 0

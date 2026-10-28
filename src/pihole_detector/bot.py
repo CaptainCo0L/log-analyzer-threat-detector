@@ -14,13 +14,14 @@ import threading
 import time
 from collections import Counter
 
-from .changes import PiholeChanges
+from .changes import add_client, add_domain, delete_client, delete_domain, set_blocking, update_client
 from .domains import apex
 from .names import ipv4_of
 from .report import build_report
 from .rotation import is_private
 from .delivery import APEX, MAX_MUTE, QUIET, in_quiet
 from .sinks import RULES, SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, when
+from .source import PiholeClient
 from .model import HIGH, LOW, MEDIUM
 
 log = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ def wild_regex(domain: str) -> str:
     return r"(\.|^)" + domain.replace(".", r"\.") + "$"
 
 
-def _shown(value):
+def _display_setting(value):
     return ", ".join(value) if isinstance(value, tuple) else value
 
 
@@ -127,10 +128,10 @@ def drain(inbox: queue.Queue, bot: "Bot", state, now: float) -> None:
 
 
 class Bot:
-    def __init__(self, det, api, telegram, started: float | None = None):
+    def __init__(self, det, api: PiholeClient, telegram, started: float | None = None):
         self.det, self.api, self.telegram = det, api, telegram
         self.delivery = det.delivery
-        self.changes = PiholeChanges(det.cfg, api)
+        self.changes = det.changes  # one owner of the change logs; its API is this same api
         self.started = started if started is not None else time.time()
         self.owner = str(det.cfg.telegram_chat_id)
         self._strangers: set[str] = set()
@@ -181,9 +182,6 @@ class Bot:
     def reply(self, text: str, buttons=None) -> bool:
         return self.delivery.send(text, buttons)
 
-    def button(self, label: str, payload: dict, now: float, style: str | None = None) -> dict:
-        return self.delivery.button(label, payload, now, style)
-
     # alert buttons --------------------------------------------------------------------------
     def press_block(self, payload: dict, now: float) -> str:
         domain = payload["domain"]
@@ -192,7 +190,7 @@ class Bot:
         except Exception as exc:
             self.reply(f"⚠️ Couldn't block <code>{esc(domain)}</code>: {esc(exc)}")
             return f"Couldn't block: {exc}"[:200]
-        undo = self.button("↩️ Undo", {"kind": "unblock", "domain": domain}, now)
+        undo = self.delivery.button("↩️ Undo", {"kind": "unblock", "domain": domain}, now)
         self.reply(f"🛡 Blocked <code>{esc(domain)}</code> and all its subdomains for everyone.", buttons=[[undo]])
         return "Blocked"
 
@@ -211,7 +209,7 @@ class Bot:
         self.delivery.mute(payload["rule"], payload["ident"], now + hours * 3600)
         title = RULES.get(payload["rule"], (payload["rule"], ""))[0]
         span = f"{hours // 24} d" if hours >= 48 else f"{hours} h"
-        undo = self.button("↩️ Undo", {**payload, "kind": "unmute"}, now)
+        undo = self.delivery.button("↩️ Undo", {**payload, "kind": "unmute"}, now)
         self.reply(f"🔕 Muted <b>{esc(title)}</b> for {esc(payload['label'])} for {span}, until "
                    f"{esc(when(now + hours * 3600))}. Those alerts are still logged and in the daily report.",
                    buttons=[[undo]])
@@ -246,7 +244,7 @@ class Bot:
         except Exception as exc:
             self.reply(f"⚠️ Pi-hole refused that: {esc(exc)}")
             return False
-        buttons = [[self.button(undo_label, {"kind": "ops", "ops": undo, "command": "undo",
+        buttons = [[self.delivery.button(undo_label, {"kind": "ops", "ops": undo, "command": "undo",
                                              "text": "↩️ Undone."}, now)]] if undo else None
         self.reply(text, buttons=buttons)
         return True
@@ -276,7 +274,7 @@ class Bot:
         else:
             target = apex(domain)
             op, what = ["deny", "regex", wild_regex(target)], f"<code>{esc(target)}</code> and all its subdomains"
-        self._change(f"/block {' '.join(args)}", [["add_domain", *op]], [["delete_domain", *op]],
+        self._change(f"/block {' '.join(args)}", [add_domain(*op)], [delete_domain(*op)],
                      f"🛡 Blocked {what} for everyone.", now)
 
     def cmd_allow(self, args, now) -> None:
@@ -288,7 +286,7 @@ class Bot:
             op, what = ["allow", "regex", wild_regex(target)], f"<code>{esc(target)}</code> and all its subdomains"
         else:
             op, what = ["allow", "exact", domain], f"<code>{esc(domain)}</code> (that exact name)"
-        self._change(f"/allow {' '.join(args)}", [["add_domain", *op]], [["delete_domain", *op]],
+        self._change(f"/allow {' '.join(args)}", [add_domain(*op)], [delete_domain(*op)],
                      f"✅ Allowed {what} for everyone.", now)
 
     def _remove_listed(self, list_type: str, args, now) -> None:
@@ -299,15 +297,15 @@ class Bot:
         removed = []
         for kind, value in (("regex", wild_regex(apex(domain))), ("exact", domain)):
             try:
-                self.changes.apply([["delete_domain", list_type, kind, value]], now, f"/un{list_type} {domain}")
-                removed.append(["add_domain", list_type, kind, value])
+                self.changes.apply([delete_domain(list_type, kind, value)], now, f"/un{list_type} {domain}")
+                removed.append(add_domain(list_type, kind, value))
             except Exception:
                 continue  # not on the list in that form
         listed = "deny" if list_type == "deny" else "allow"
         if not removed:
             self.reply(f"<code>{esc(domain)}</code> wasn't on Pi-hole's {listed} list, as an exact name or with subdomains.")
             return
-        undo = self.button("↩️ Undo", {"kind": "ops", "ops": removed, "command": "undo", "text": "↩️ Undone."}, now)
+        undo = self.delivery.button("↩️ Undo", {"kind": "ops", "ops": removed, "command": "undo", "text": "↩️ Undone."}, now)
         verb = "Unblocked" if list_type == "deny" else "Removed the allow for"
         self.reply(f"{'🔓' if list_type == 'deny' else '🚫'} {verb} <code>{esc(domain)}</code>.", buttons=[[undo]])
 
@@ -326,12 +324,12 @@ class Bot:
         capped = minutes > MAX_PAUSE_MINUTES
         minutes = min(minutes, MAX_PAUSE_MINUTES)
         note = f" ({MAX_PAUSE_MINUTES} min is the most I'll pause)" if capped else ""
-        self._change(f"/pause {minutes}", [["blocking", False, minutes * 60]], [["blocking", True, None]],
+        self._change(f"/pause {minutes}", [set_blocking(False, minutes * 60)], [set_blocking(True)],
                      f"⏸ Blocking paused for {minutes} min{note}. Pi-hole turns it back on by itself, "
                      f"at {esc(when(now + minutes * 60))}.", now, undo_label="▶️ Resume now")
 
     def cmd_resume(self, args, now) -> None:
-        self._change("/resume", [["blocking", True, None]], None, "▶️ Blocking is on again.", now)
+        self._change("/resume", [set_blocking(True)], None, "▶️ Blocking is on again.", now)
 
     def _targets(self, query: str) -> tuple[list, str | None]:
         """The device(s) a /name or /group means: one device, or one device on several MACs."""
@@ -361,11 +359,11 @@ class Bot:
         for dev in targets:
             entry = entries.get(dev.hwaddr)
             if entry:
-                ops.append(["update_client", entry.client, new_name, list(entry.groups)])
-                undo.append(["update_client", entry.client, entry.comment, list(entry.groups)])
+                ops.append(update_client(entry.client, new_name, entry.groups))
+                undo.append(update_client(entry.client, entry.comment, entry.groups))
             else:
-                ops.append(["add_client", dev.hwaddr, new_name, [0]])
-                undo.append(["delete_client", dev.hwaddr])
+                ops.append(add_client(dev.hwaddr, new_name, [0]))
+                undo.append(delete_client(dev.hwaddr))
         macs = ", ".join(f"<code>{d.hwaddr}</code>" for d in targets)
         self._change(f"/name {' '.join(args)}", ops, undo, f"🏷 Named {macs} <b>{esc(new_name)}</b> in Pi-hole Clients.", now)
 
@@ -395,18 +393,18 @@ class Bot:
             have = set(entry.groups) if entry else {0}
             want = sorted(have - {gid} if remove else have | {0, gid})
             if entry:
-                ops.append(["update_client", entry.client, entry.comment, want])
-                undo.append(["update_client", entry.client, entry.comment, list(entry.groups)])
+                ops.append(update_client(entry.client, entry.comment, want))
+                undo.append(update_client(entry.client, entry.comment, entry.groups))
             elif not remove:
-                ops.append(["add_client", dev.hwaddr, self._name(dev), want])
-                undo.append(["delete_client", dev.hwaddr])
+                ops.append(add_client(dev.hwaddr, self._name(dev), want))
+                undo.append(delete_client(dev.hwaddr))
         label, name = esc(self._name(targets[0])), esc(groups[gid])
         if not ops:
             self.reply(f"{label} isn't in {name}.")
             return
         command = f"/group {' '.join(args)}"
         if remove:
-            confirm = self.button(f"✅ Remove from {groups[gid]}", {
+            confirm = self.delivery.button(f"✅ Remove from {groups[gid]}", {
                 "kind": "ops", "ops": ops, "undo": undo, "command": command,
                 "text": f"👥 Removed {label} from <b>{name}</b>."}, now, style="danger")
             self.reply(f"Remove {label} from <b>{name}</b>? That changes which lists block things for it.",
@@ -420,7 +418,7 @@ class Bot:
         seconds = int(match[1]) * {"m": 60, "h": 3600, "d": 86400}[match[2]] if match else 3600
         seconds = min(max(seconds, 60), MAX_MUTE)
         self.delivery.mute_all(now + seconds)
-        unmute = self.button("🔔 Unmute now", {"kind": "unmute_all"}, now)
+        unmute = self.delivery.button("🔔 Unmute now", {"kind": "unmute_all"}, now)
         self.reply(f"🔕 Instant alerts held until {esc(when(now + seconds))}. They're still logged, and you'll "
                    "get them in one message when it ends. Health and rotation messages still come through.",
                    buttons=[[unmute]])
@@ -468,7 +466,7 @@ class Bot:
         except ValueError as exc:
             self.reply(f"⚠️ {esc(exc)}. /settings lists what can be changed.")
             return
-        self.reply(f"⚙️ {name} = <code>{esc(_shown(value))}</code> from now on, and after restarts. "
+        self.reply(f"⚙️ {name} = <code>{esc(_display_setting(value))}</code> from now on, and after restarts. "
                    f"/unset {name} goes back to the .env value.")
 
     def cmd_unset(self, args, now) -> None:
@@ -478,12 +476,12 @@ class Bot:
         except ValueError:
             self.reply("Usage: /unset NAME. /settings lists the names.")
             return
-        self.reply(f"⚙️ {name} is back to <code>{esc(_shown(value))}</code>.")
+        self.reply(f"⚙️ {name} is back to <code>{esc(_display_setting(value))}</code>.")
 
     def cmd_settings(self, args, now) -> None:
         lines = ["⚙️ <b>Settings you can change</b> (/set NAME value)", ""]
         for name, value, set_here in self.det.settings.items():
-            shown = _shown(value)
+            shown = _display_setting(value)
             mark = " · <i>set here</i>" if set_here else ""
             lines.append(f"<code>{name}</code> = {esc(shown if shown != '' else '-')}{mark}")
         self.reply(fit("\n".join(lines)))
@@ -557,7 +555,7 @@ class Bot:
             if len(body) > room:
                 body = body[:room].rsplit("\n", 1)[0] + "\n…"
             lines += ["", f"<blockquote expandable>{body}</blockquote>"]
-        full = self.button("📄 Full report", {"kind": "full_report", "days": days, "end": now}, now)
+        full = self.delivery.button("📄 Full report", {"kind": "full_report", "days": days, "end": now}, now)
         self.reply("\n".join(lines), buttons=[[full]])
 
     def press_full_report(self, payload: dict, now: float) -> str:

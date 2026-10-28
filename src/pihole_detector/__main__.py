@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+from . import yearlog
 from .changes import PiholeChanges
 from .bot import start_bot
 from .config import Config
@@ -195,14 +196,13 @@ def cmd_names(cfg: Config, wait: float, api=None, probe=discover, save: bool = F
 
 def cmd_clients_undo(cfg: Config, api=None) -> int:
     """Reverse the newest rotation sync not yet undone: remove the MAC it added, re-add those it removed."""
-    changes = PiholeChanges(cfg)
-    change, why_not = changes.pending_sync()
+    change, why_not = PiholeChanges(cfg).pending_sync()
     if not change:
         print(why_not)
         return 1
-    api = changes.api = api or PiholeApi(cfg.pihole_url, cfg.pihole_password)  # only once there is work
+    api = api or PiholeApi(cfg.pihole_url, cfg.pihole_password)  # log in only once there is work
     try:
-        changes.undo_sync(change, time.time())
+        PiholeChanges(cfg, api).undo_sync(change, time.time())
     finally:
         if hasattr(api, "logout"):
             api.logout()
@@ -216,7 +216,7 @@ def cmd_report(cfg: Config, file: str | None, days: float) -> int:
     path = Path(file or cfg.alerts_path)
     end = time.time()
     start = end - days * 86400
-    if path.exists():
+    if yearlog.files(path):  # the live file, or only last year's after a rollover
         records, skipped = AlertLog(path).read_counted(start, end)
     elif file:
         print(f"no such alerts file: {path}", file=sys.stderr)
