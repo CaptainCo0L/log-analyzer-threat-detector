@@ -13,3 +13,10 @@ The five default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root, created when the first term or decision is settled. See `docs/agents/domain.md`.
+
+## Working here
+
+- Checks: CI runs `ruff check src tests`, `mypy` and `pytest` (`.github/workflows/tests.yml`); run all three before committing.
+- A change in several parts gets one commit per part, on a branch, made as soon as that part's tests pass.
+- Deploy with `deploy/deploy.sh` once the work is committed.
+- Review rules beyond the linters: `CODING_STANDARDS.md`.
