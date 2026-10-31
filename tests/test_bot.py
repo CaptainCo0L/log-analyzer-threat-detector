@@ -239,6 +239,15 @@ def test_whois_with_no_match_or_several_matches_says_so(make_detector):
     assert "No device" in replies(det)[0] and "/whois" in replies(det)[1]
 
 
+def test_device_commands_say_so_when_pi_hole_cannot_be_asked(make_detector):
+    bot, det, api = make_bot(make_detector)
+    api.down = True
+    for command in ("/devices", "/whois aswinpc", "/name aswinpc Desk"):
+        bot.handle(message(command), T0)
+    assert len(replies(det)) == 3
+    assert all("Couldn't ask Pi-hole for its devices (ApiError)" in text for text in replies(det))
+
+
 # --- wiring into the service ------------------------------------------------------------------
 
 from pihole_detector.bot import start_bot

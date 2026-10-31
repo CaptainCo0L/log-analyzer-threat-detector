@@ -333,10 +333,9 @@ class Bot:
 
     def _targets(self, query: str) -> tuple[list, str | None]:
         """The device(s) a /name or /group means: one device, or one device on several MACs."""
-        try:
-            devices = [d for d in self.api.devices() if d.is_real_mac]
-        except Exception as exc:
-            return [], f"🚨 Couldn't ask Pi-hole for its devices ({esc(type(exc).__name__)})."
+        devices, problem = self._devices()
+        if problem:
+            return [], problem
         found = self.det.directory.find(query, devices)
         if not found:
             return [], f"No device matches <code>{esc(query)}</code>. Try /devices all."
@@ -577,11 +576,17 @@ class Bot:
     def _name(self, dev) -> str:
         return self.det.directory.label(dev)
 
-    def cmd_devices(self, args, now) -> None:
+    def _devices(self) -> tuple[list, str | None]:
+        """Pi-hole's devices, or the message to send when it can't be asked."""
         try:
-            devices = [d for d in self.api.devices() if d.is_real_mac]
+            return [d for d in self.api.devices() if d.is_real_mac], None
         except Exception as exc:
-            self.reply(f"🚨 Couldn't ask Pi-hole for its devices ({esc(type(exc).__name__)}).")
+            return [], f"🚨 Couldn't ask Pi-hole for its devices ({esc(type(exc).__name__)})."
+
+    def cmd_devices(self, args, now) -> None:
+        devices, problem = self._devices()
+        if problem:
+            self.reply(problem)
             return
         groups, names = self._groups_by_mac()
         show_all = bool(args) and args[0].lower() == "all"
@@ -604,10 +609,9 @@ class Bot:
         if not args:
             self.reply("Usage: /whois <name, IP or MAC>, e.g. /whois Aswins-iPad")
             return
-        try:
-            devices = [d for d in self.api.devices() if d.is_real_mac]
-        except Exception as exc:
-            self.reply(f"🚨 Couldn't ask Pi-hole for its devices ({esc(type(exc).__name__)}).")
+        devices, problem = self._devices()
+        if problem:
+            self.reply(problem)
             return
         found = self.det.directory.find(" ".join(args), devices)
         if not found:
