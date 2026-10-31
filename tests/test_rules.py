@@ -309,6 +309,18 @@ def test_new_device_stays_high_when_name_unknown_or_mac_is_burned_in(make_detect
     assert [a.severity for a in alerts] == ["HIGH", "HIGH"]
 
 
+def test_new_device_stays_high_when_a_known_name_comes_from_an_untrusted_probe(make_detector):
+    # any device can claim a NetBIOS or SSDP name, so that alone must not downgrade it
+    det = make_detector()
+    det.directory.names.update({IPAD_OLD: ("Aswins-iPad", "mDNS")}, T0)
+    det.probe = lambda ips, wait: {"192.0.2.31": {"NetBIOS": "Aswins-iPad"}, "192.0.2.32": {"SSDP": "Aswins-iPad"}}
+    netbios = Device(hwaddr=IPAD_NEW, ips=("192.0.2.31",), first_seen=T0)
+    ssdp = Device(hwaddr="06:00:00:00:00:32", ips=("192.0.2.32",), first_seen=T0)
+    alerts = det.process_devices([netbios, ssdp], T0 + 100)
+    assert [a.severity for a in alerts] == ["HIGH", "HIGH"]
+    assert not any("previous_mac" in a.evidence for a in alerts)
+
+
 def test_new_device_probe_failure_keeps_high(make_detector):
     det = make_detector()
 
