@@ -29,7 +29,7 @@ class IotOffBaseline(QueryRule):
         )]
 
 
-def new_devices(devices: list[Device], ctx: Context, now: float, quiet: bool,
+def new_devices(devices: list[Device], ctx: Context, now: float, quiet: bool, label_of,
                 rotated_from=lambda dev, now: None) -> list[Alert]:
     """Alert on MACs never seen before. `quiet` records them without alerting (first run).
 
@@ -55,9 +55,8 @@ def new_devices(devices: list[Device], ctx: Context, now: float, quiet: bool,
                 dedup=f"new_device|{dev.hwaddr}",
             ))
             continue
-        label = dev.name or dev.vendor or (dev.ips[0] if dev.ips else dev.hwaddr)
         alerts.append(Alert(
-            time=now, severity=HIGH, rule="new_device", label=label, domain="",
+            time=now, severity=HIGH, rule="new_device", label=label_of(dev), domain="",
             device=dev.hwaddr, mac=dev.hwaddr, ips=dev.ips[:2],
             message=f"New device on the LAN: {dev.hwaddr} {dev.vendor or 'unknown vendor'}, "
                     f"IPs {', '.join(dev.ips) or 'none'} (may be a rotated private Wi-Fi MAC)",

@@ -45,3 +45,14 @@ def test_previous_mac_trusts_only_the_names_rotation_sync_trusts(tmp_path):
 def test_relabel_names_records_by_their_mac(tmp_path):
     record = {"label": "old", "mac": MAC, "ips": [IP]}
     assert directory(tmp_path, {MAC: "New"}).relabel([record])[0]["label"] == "New"
+
+
+def test_a_query_is_labelled_in_the_same_order_as_a_device(tmp_path):
+    d = directory(tmp_path, saved={MAC: ("Tab", "SSDP")})
+    assert d.query_label(MAC, IP, "host") == "Tab"
+    d = directory(tmp_path)
+    d.learn([Device(hwaddr=MAC, ips=(IP,), first_seen=T0, vendor="LG")])
+    assert d.query_label(MAC, IP, "host") == "host"
+    assert d.query_label(MAC, IP, None) == "LG device"
+    assert d.query_label(MAC, IP, IP) == "LG device"     # Pi-hole shows the IP when it has no hostname
+    assert d.query_label(None, IP, None) == IP

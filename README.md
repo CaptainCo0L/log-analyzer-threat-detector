@@ -146,7 +146,7 @@ and prints a table plus a block to paste into Pi-hole's Clients comments. `names
 `names --save` also stores what it found in `data/names.json` (MAC → name, source, last confirmed).
 
 A device is named, in order, by: its **Pi-hole Clients comment**, then the **saved discovered
-name**, then Pi-hole's own hostname for it, then its IP. The daily report and `report` look names
+name**, then Pi-hole's own hostname for it, then a vendor guess, then its IP. The daily report and `report` look names
 up when they are displayed, by the MAC in each alert, so a name found after an alert fired still
 shows; `alerts.jsonl` is never rewritten.
 

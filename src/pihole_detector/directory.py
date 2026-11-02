@@ -1,7 +1,7 @@
 """Who a device is: what to call it, which other MACs it has used, and finding it from what the owner typed.
 
 A device is named, best first, by its Pi-hole Clients comment (by MAC, then by IP), the name discovery
-saved for it, Pi-hole's own hostname for it, a vendor guess, and last its MAC. Every alert, report and
+saved for it, Pi-hole's own hostname for it, a vendor guess, and last its MAC or IP. Every alert, report and
 bot reply asks this module, so the order lives in one place.
 """
 
@@ -20,11 +20,13 @@ class Directory:
         self._comments = comments  # () -> {MAC or IP: Clients comment}, re-read with the intel
         self.names = names
         self.ip_to_mac: dict[str, str] = {}
+        self._vendors: dict[str, str | None] = {}
 
     def learn(self, devices) -> None:
         """Remember which MAC each IP belongs to, from a Pi-hole device snapshot."""
         for dev in devices:
             if dev.is_real_mac:
+                self._vendors[dev.hwaddr] = dev.vendor
                 for ip in dev.ips:
                     self.ip_to_mac[ip] = dev.hwaddr
 
@@ -32,10 +34,17 @@ class Directory:
         """A name a person or discovery chose (comment, then saved name), or None."""
         return comment_for(self._comments(), mac, ip) or self.names.name(mac) or None
 
+    def _best(self, mac: str | None, ip: str | None, hostname: str | None, vendor: str | None) -> str | None:
+        return self.name(mac, ip) or hostname or (f"{vendor} device" if vendor else None)
+
     def label(self, dev) -> str:
         """What to call a Pi-hole device: never empty."""
-        return (self.name(dev.hwaddr, ipv4_of(dev)) or dev.name
-                or (f"{dev.vendor} device" if dev.vendor else dev.hwaddr))
+        return self._best(dev.hwaddr, ipv4_of(dev), dev.name, dev.vendor) or dev.hwaddr
+
+    def query_label(self, mac: str | None, ip: str, hostname: str | None) -> str:
+        """What to call the sender of a query, which may have no MAC yet: never empty."""
+        vendor = self._vendors.get(mac) if mac else None
+        return self._best(mac, ip, hostname if hostname != ip else None, vendor) or ip
 
     def source(self, dev) -> str:
         """Where label(dev) came from, in words."""

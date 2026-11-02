@@ -59,11 +59,10 @@ class Detector:
 
     # identity -----------------------------------------------------------------
     def identify(self, q: Query) -> tuple[str, str, str]:
-        """(ident, MAC or "", friendly label). Comment > discovered name > Pi-hole hostname > IP."""
+        """(ident, MAC or "", friendly label)."""
         mac = self.directory.ip_to_mac.get(q.client_ip)
         ident = self.state.device_of(mac) if mac else q.client_ip
-        hostname = q.client_name if q.client_name and q.client_name != q.client_ip else None
-        label = self.directory.name(mac, q.client_ip) or hostname or q.client_ip
+        label = self.directory.query_label(mac, q.client_ip, q.client_name)
         self.labels[ident] = label
         return ident, mac or "", label
 
@@ -96,7 +95,7 @@ class Detector:
             if dev.is_real_mac:
                 self.labels[dev.hwaddr] = self.directory.label(dev)
         first_run = not self.state.get("devices_seeded", False)
-        alerts = new_devices(devices, self.ctx, now, quiet=first_run, rotated_from=self.rotated_from)
+        alerts = new_devices(devices, self.ctx, now, first_run, self.directory.label, self.rotated_from)
         self.state.put("devices_seeded", True)
         return self.emit(alerts)
 

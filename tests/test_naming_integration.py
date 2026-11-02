@@ -2,7 +2,7 @@
 
 import time
 
-from pihole_detector.model import Alert
+from pihole_detector.model import Alert, Device
 from pihole_detector.namestore import NameStore
 from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0, q
 
@@ -148,3 +148,27 @@ def test_a_names_file_saved_by_hand_is_picked_up_without_a_restart(make_detector
     manual.save()
     det.tick(TUESDAY_9AM)
     assert det.directory.names.name(PC_MAC) == "Aswins-PC"
+
+
+def test_a_new_device_alert_is_labelled_like_every_other_alert(make_detector):
+    det = make_detector()
+    det.intel.names = {"02:00:00:00:00:99": "Guest laptop"}
+    new = Device(hwaddr="02:00:00:00:00:99", ips=("192.0.2.99",), first_seen=T0, vendor="Acme")
+    assert [a.label for a in det.process_devices([new], T0 + 100)] == ["Guest laptop"]
+
+
+def test_a_new_device_alert_uses_the_name_it_just_answered_with(make_detector):
+    det = make_detector()
+    det.probe = lambda ips, wait, **_: {"192.0.2.99": {"mDNS": "Guests-Phone"}}
+    new = Device(hwaddr="06:00:00:00:00:99", ips=("192.0.2.99",), first_seen=T0, vendor="Acme")
+    alert = det.process_devices([new], T0 + 100)[0]
+    assert (alert.severity, alert.label) == ("HIGH", "Guests-Phone")
+
+
+def test_a_device_keeps_one_label_between_queries_and_snapshots(make_detector):
+    det = make_detector()
+    device = Device(hwaddr="02:00:00:00:00:98", ips=("192.0.2.98",), first_seen=T0, vendor="LG")
+    det.process_devices([device], T0 + 100)
+    assert det.labels[device.hwaddr] == "LG device"
+    det.process_query(q("example.com", t=200, ip="192.0.2.98"))
+    assert det.labels[device.hwaddr] == "LG device"
