@@ -255,7 +255,7 @@ def test_device_commands_say_so_when_pi_hole_cannot_be_asked(make_detector):
     for command in ("/devices", "/whois aswinpc", "/name aswinpc Desk"):
         bot.handle(message(command), T0)
     assert len(replies(det)) == 3
-    assert all("Couldn't ask Pi-hole for its devices (ApiError)" in text for text in replies(det))
+    assert all("Couldn't ask Pi-hole for its devices" in text and "ApiError" in text for text in replies(det))
 
 
 # --- wiring into the service ------------------------------------------------------------------

@@ -244,7 +244,7 @@ def test_digest_lists_medium_low_and_is_sent_even_when_empty():
                         {"queries": 42})
     assert "1 high" in text and "1 medium" in text and "Regular check-ins" in text and "42 lookups" in text
     assert text.index("Malware") < text.index("Regular check-ins")   # HIGH listed first
-    assert "Nothing suspicious" in build_digest([], {})
+    assert "nothing suspicious" in build_digest([], {})
 
 
 # --- Bot API transport: buttons, 429, spacing, long polling, documents, command menu -----------

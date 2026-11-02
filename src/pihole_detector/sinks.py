@@ -45,6 +45,30 @@ def severity_line(counts, zeros: bool = False) -> str:
                       for s in (HIGH, MEDIUM, LOW) if zeros or counts.get(s))
 
 
+def layout(icon: str, headline: str, facts=(), action: str = "", details=()) -> str:
+    """Every message reads the same way: what happened, what matters about it, what you can do, then the
+    technical rest folded away. All parts are HTML. One too long for Telegram loses lines from the end of
+    its facts, then its details, so no tag is ever cut in two."""
+    facts, details = list(facts), [line for line in details if line]
+
+    def text() -> str:
+        lines = [f"{icon} <b>{headline}</b>", *facts]
+        if action:
+            lines += ["", action]
+        if details:
+            body = "\n".join(details)
+            lines += ["", f"<blockquote expandable>{body}</blockquote>"]
+        return "\n".join(lines)
+
+    if len(text()) <= TELEGRAM_LIMIT:
+        return text()
+    for lines in (facts, details):
+        while lines and len(text()) > TELEGRAM_LIMIT - 20:
+            lines.pop()
+    facts.append("<i>… cut short</i>")
+    return text()
+
+
 def esc(value) -> str:
     return html.escape(str(value), quote=False)
 
@@ -106,21 +130,18 @@ def _technical(alert: Alert) -> list[str]:
 def format_push(alert: Alert, hint: bool = True) -> str:
     """The pushed alert: what happened, then the rest folded away. `hint=False` drops the "run on the NAS"
     block command, for when buttons carry it. The quote comes last: button presses add a status after it."""
-    lines = [f"{SEVERITY_ICON.get(alert.severity, '⚪')} <b>{esc(headline(alert))}</b>"]
-    if alert.domain:
-        lines.append(f"<code>{esc(alert.domain)}</code>")
+    facts = [f"<code>{esc(alert.domain)}</code>"] if alert.domain else []
     fact = outcome(alert)
     if fact:
-        lines.append(esc(fact))
+        facts.append(esc(fact))
     block = (alert.evidence or {}).get("block")
-    if block and hint:
-        lines += ["", "🛡 To block it, run on the NAS:", f"<code>{esc(block)}</code>"]
+    action = f"🛡 To block it, run on the NAS:\n<code>{esc(block)}</code>" if block and hint else ""
     address = [part for part in (*alert.ips, alert.mac) if part and part != alert.label]
     meaning = RULES.get(alert.rule, (alert.rule, ""))[1]
     folded = [" · ".join(address), *_technical(alert), meaning,
               f"{when(alert.time)} · {alert.severity} · {alert.rule}"]
-    body = "\n".join(esc(line) for line in folded if line)
-    return "\n".join([*lines, "", f"<blockquote expandable>{body}</blockquote>"])
+    return layout(SEVERITY_ICON.get(alert.severity, "⚪"), esc(headline(alert)), facts, action,
+                  [esc(line) for line in folded if line])
 
 
 def _digest_item(r: dict) -> str:
@@ -142,52 +163,43 @@ def build_digest(records: list[dict], stats: dict, start: float | None = None, e
     """One daily message. Always sent, even when empty: a missing digest means the detector died."""
     end = end or time.time()
     by_sev = Counter(r["severity"] for r in records)
-    lines = ["📊 <b>Pi-hole daily report</b>"]
-    if start:
-        lines.append(f"<i>{esc(when(start))} → {esc(when(end))}</i>")
-    lines.append("")
     failures = stats.get("api_failures", 0)
-    health = "✅ Detector running" if not failures else f"⚠️ Detector running, {failures} failed polls"
     count = stats.get("queries", 0)
-    lines.append(f"{health} · {count:,} lookup{'' if count == 1 else 's'} checked")
-    if not records:
-        lines.append("✨ Nothing suspicious.")
-    else:
-        lines.append(severity_line(by_sev))
-        order = {HIGH: 0, MEDIUM: 1, LOW: 2}
-        groups: dict[str, list[dict]] = {}
-        for r in sorted(records, key=lambda r: (order.get(r["severity"], 3), r["time"])):
-            groups.setdefault(r["rule"], []).append(r)
-        for rule, items in groups.items():
-            lines += ["", f"{SEVERITY_ICON.get(items[0]['severity'], '⚪')} <b>{esc(rule_title(rule))}</b> ({len(items)})"]
-            lines += [_digest_item(r) for r in items[:5]]
-            if len(items) > 5:
-                lines.append(f"  <i>+{len(items) - 5} more</i>")
-    lines += ["", "<i>Full details: data/alerts.jsonl on the NAS</i>"]
-    text = "\n".join(lines)
-    if len(text) > TELEGRAM_LIMIT:
-        text = text[: TELEGRAM_LIMIT - 60].rsplit("\n", 1)[0] + "\n<i>… cut short, see alerts.jsonl</i>"
-    return text
+    facts = [f"⚠️ {failures} failed polls"] if failures else []
+    order = {HIGH: 0, MEDIUM: 1, LOW: 2}
+    groups: dict[str, list[dict]] = {}
+    for r in sorted(records, key=lambda r: (order.get(r["severity"], 3), r["time"])):
+        groups.setdefault(r["rule"], []).append(r)
+    for rule, items in groups.items():
+        facts += ["", f"{SEVERITY_ICON.get(items[0]['severity'], '⚪')} <b>{esc(rule_title(rule))}</b> ({len(items)})"]
+        facts += [_digest_item(r) for r in items[:5]]
+        if len(items) > 5:
+            facts.append(f"  <i>+{len(items) - 5} more</i>")
+    icon = "⚠️" if failures else "📊" if records else "✅"
+    summary = severity_line(by_sev) if records else "nothing suspicious"
+    window = f"{when(start)} → {when(end)}" if start else ""
+    return layout(icon, f"Pi-hole daily report: {esc(summary)}", facts, details=[
+        esc(window), f"Detector running · {count:,} lookup{'' if count == 1 else 's'} checked",
+        "Full details: data/alerts.jsonl on the NAS"])
 
 
 def format_down(failures: int, reason: str) -> str:
-    return ("🚨 <b>Pi-hole is not responding</b>\n\n"
-            f"The detector couldn't reach it {failures} times in a row.\n"
-            "Pi-hole is the only DNS server on your network, so if it is really down, "
-            "no device can open websites.\n\n"
-            f"<i>Reason: {esc(reason)}</i>")
+    return layout("🚨", "Pi-hole is not responding", [
+        f"The detector couldn't reach it {failures} times in a row.",
+        "It's the only DNS server on your network, so if it's really down, no device can open websites."],
+        "Check the Pi-hole container on the NAS.", [f"Reason: {esc(reason)}"])
 
 
 def format_up(seconds: float) -> str:
     minutes, secs = divmod(int(seconds), 60)
     took = f"{minutes} min {secs} s" if minutes else f"{secs} s"
-    return f"✅ <b>Pi-hole is back</b>\n\nReachable again after {took}."
+    return layout("✅", "Pi-hole is back", [f"Reachable again after {took}."])
 
 
 def format_test(push_enabled: bool) -> str:
     mode = ("ON - HIGH alerts arrive instantly" if push_enabled
             else "OFF (trial mode) - everything goes into the 09:00 report")
-    return f"👋 <b>Pi-hole detector connected</b>\n\nInstant alerts: {mode}."
+    return layout("👋", "Pi-hole detector connected", [f"Instant alerts: {mode}."])
 
 
 def fit(text: str) -> str:

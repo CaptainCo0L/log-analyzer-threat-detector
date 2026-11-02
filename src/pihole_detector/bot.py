@@ -20,7 +20,7 @@ from .domains import apex
 from .names import ipv4_of
 from .report import build_report
 from .delivery import APEX, MAX_MUTE, QUIET, in_quiet, mute_row
-from .sinks import SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, rule_title, severity_line, when
+from .sinks import SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, layout, rule_title, severity_line, when
 from .source import ApiError, PiholeClient
 from .model import HIGH, LOW, MEDIUM, is_private
 
@@ -55,6 +55,7 @@ MAX_PAUSE_MINUTES = 60
 STALE_SECONDS = 300
 ONLINE_SECONDS = 900
 MAX_REPORT_DAYS = 30
+SEE_STATUS = "/status shows whether Pi-hole is up."
 # Said the moment a button is pressed; the result then appears in the chat. Telegram allows one answer per press.
 PRESS_TOASTS = {"block": "Blocking…", "unblock": "Unblocking…", "mute": "Muting…", "unmute": "Unmuting…",
                 "unmute_all": "Unmuting…", "ops": "Working…", "undo_rotation": "Undoing…",
@@ -167,13 +168,14 @@ class Bot:
         command = command.split("@", 1)[0].lstrip("/").lower() if command.startswith("/") else ""
         args = rest.split()
         if command in WRITE_COMMANDS and now - float(msg.get("date") or 0) > STALE_SECONDS:
-            self.reply("⌛ That command is from a while ago, so I didn't run it. Send it again if you still want it.")
+            self.reply(layout("⌛", "That command is from a while ago", ["I didn't run it."],
+                              "Send it again if you still want it."))
             return
         handler = getattr(self, f"cmd_{command}", None) if command else None
         try:
             (handler or self.cmd_help)(args, now)
         except ApiError as exc:  # a read the command needed failed: never leave the owner with silence
-            self.reply(f"🚨 Couldn't ask Pi-hole: {esc(exc)}")
+            self.reply(layout("🚨", "Couldn't ask Pi-hole", [esc(exc)], SEE_STATUS))
 
     def on_press(self, cb: dict, now: float) -> None:
         data = cb.get("data") or ""
@@ -243,7 +245,7 @@ class Bot:
         try:
             self.changes.undo_sync(change, now)
         except Exception as exc:
-            self.reply(f"⚠️ Undo failed part-way: {esc(exc)}. Check Pi-hole > Clients.")
+            self.reply(layout("⚠️", "Undo failed part-way", [esc(exc)], "Check Pi-hole > Clients."))
             return
         restored = ", ".join(e["mac"] for e in change["deleted"]) or "nothing"
         self.reply(f"↩️ Undone for {esc(change['name'])}: removed <code>{change['added']['mac']}</code>, "
@@ -261,7 +263,7 @@ class Bot:
         try:
             self.changes.apply(change.ops, now, command)
         except Exception as exc:
-            self.reply(f"⚠️ Pi-hole refused that: {esc(exc)}")
+            self.reply(layout("⚠️", "Pi-hole refused that", [esc(exc)], SEE_STATUS))
             return False
         return True
 
@@ -315,8 +317,9 @@ class Bot:
             return
         removed, error = self.changes.unlist(list_type, domain, now, f"{command} {domain}")
         if error:
-            partly = " Part of it was already removed; Undo puts that back." if removed else ""
-            self.reply(f"⚠️ Pi-hole refused that: {esc(error)}{partly}", buttons=self._undo_button(removed, now))
+            action = "Part of it was already removed; Undo puts that back." if removed else SEE_STATUS
+            self.reply(layout("⚠️", "Pi-hole refused that", [esc(error)], action),
+                       buttons=self._undo_button(removed, now))
             return
         if not removed:
             self.reply(f"<code>{esc(domain)}</code> wasn't on Pi-hole's {list_type} list, as an exact name or with subdomains.")
@@ -490,32 +493,39 @@ class Bot:
     # /status --------------------------------------------------------------------------------
     def cmd_status(self, args, now) -> None:
         cfg, stats = self.det.cfg, self.det.stats
+        actions = []
         try:
             blocking = self.api.get("/dns/blocking")
-            timer = f", back on in {ago(blocking['timer'])}" if blocking.get("timer") else ""
-            pihole = f"✅ Pi-hole up, blocking {esc(blocking.get('blocking'))}{timer}"
         except Exception as exc:
-            pihole = f"🚨 Pi-hole not reachable ({esc(type(exc).__name__)})"
-        alerts = severity_line({s: stats.get(f"alert_{s}", 0) for s in (HIGH, MEDIUM, LOW)}, zeros=True)
-        last = self.det.state.get("last_digest")
-        lines = [
-            "📟 <b>Status</b>", "",
-            pihole,
-            f"🛰 Detector up {ago(now - self.started)} · {stats.get('queries', 0):,} lookups checked "
-            f"since {esc(when(last)) if last else 'start'}",
-            alerts,
-            f"🔔 Instant alerts {'on' if cfg.push_enabled else 'off'} · next report {esc(when(self.det.next_digest(now)))}",
-            f"🔁 Rotation sync {'on' if cfg.rotation_sync else 'off'} · nmap {'on' if cfg.nmap_enabled else 'off'}",
-        ]
+            icon, summary, pihole = "🚨", "Pi-hole is not reachable", f"Pi-hole: {esc(type(exc).__name__)}"
+        else:
+            value = esc(blocking.get("blocking"))
+            timer = f", back on in {ago(blocking['timer'])}" if blocking.get("timer") else ""
+            pihole = f"Blocking: {value}"
+            if value == "enabled":
+                icon, summary = "✅", "Pi-hole is up and blocking"
+            else:
+                icon, summary = "⚠️", f"blocking is {value}{timer}"
+                actions.append("/resume turns it back on.")
+        facts = [severity_line({s: stats.get(f"alert_{s}", 0) for s in (HIGH, MEDIUM, LOW)}, zeros=True)]
         if stats.get("api_failures"):
-            lines.append(f"⚠️ {stats['api_failures']} failed polls since the last report")
+            facts.append(f"⚠️ {stats['api_failures']} failed polls since the last report")
         mute_until, quiet = self.delivery.mute_until, self.delivery.quiet
         if mute_until > now or quiet:
             parts = [f"Muted until {esc(when(mute_until))}"] if mute_until > now else []
             parts += [f"Quiet {esc(quiet)}" + (" (now)" if in_quiet(quiet, now) else "")] if quiet else []
             held = self.delivery.held
-            lines.append("🔕 " + " · ".join(parts) + (f" · {held} held" if held else ""))
-        self.reply("\n".join(lines))
+            facts.append("🔕 " + " · ".join(parts) + (f" · {held} held" if held else ""))
+        if mute_until > now:
+            actions.append("/unmute ends the hold early.")
+        last = self.det.state.get("last_digest")
+        self.reply(layout(icon, f"Status: {summary}", facts, "\n".join(actions), [
+            pihole,
+            f"Detector up {ago(now - self.started)} · {stats.get('queries', 0):,} lookups checked "
+            f"since {esc(when(last)) if last else 'start'}",
+            f"Instant alerts {'on' if cfg.push_enabled else 'off'} · next report {esc(when(self.det.next_digest(now)))}",
+            f"Rotation sync {'on' if cfg.rotation_sync else 'off'} · nmap {'on' if cfg.nmap_enabled else 'off'}",
+        ]))
 
     # /report --------------------------------------------------------------------------------
     def _records(self, days: float, now: float) -> list[dict]:
@@ -572,7 +582,7 @@ class Bot:
         try:
             return [d for d in self.api.devices() if d.is_real_mac], None
         except Exception as exc:
-            return [], f"🚨 Couldn't ask Pi-hole for its devices ({esc(type(exc).__name__)})."
+            return [], layout("🚨", "Couldn't ask Pi-hole for its devices", [esc(type(exc).__name__)], SEE_STATUS)
 
     def cmd_devices(self, args, now) -> None:
         devices, problem = self._devices()
@@ -625,29 +635,28 @@ class Bot:
         source = self.det.directory.source(dev)
         groups, names = self._groups_by_mac()
         member = ", ".join(names.get(g, str(g)) for g in groups.get(mac, ())) or "no Clients entry"
-        lines = [
-            f"🔎 <b>{esc(self._name(dev))}</b>", "",
+        facts = [f"Last lookup {ago(now - dev.last_query)} ago" if dev.last_query else "No lookups yet",
+                 f"Groups: {esc(member)}"]
+        device_of, device = self.det.state.device_of, self.det.state.device_of(mac)
+        recent = [r for r in self.det.alert_log.read(now - 30 * 86400, now) if device_of(r["device"]) == device]
+        recent.sort(key=lambda r: -r.get("time", 0))
+        facts += ["", "<b>Recent alerts</b>"]
+        facts += [f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r['rule'])}"
+                  + (f" · <code>{esc(r['domain'])}</code>" if r.get("domain") else "") for r in recent[:5]] or ["None in 30 days"]
+        details = [
             f"MAC <code>{mac}</code> ({'private' if is_private(mac) else 'burned-in'}) · {esc(dev.vendor or 'unknown vendor')}",
             *(f"Also seen as <code>{o.hwaddr}</code>, last lookup "
               + (f"{ago(now - o.last_query)} ago" if o.last_query else "never") for o in others),
             f"IP {esc(', '.join(dev.ips) or 'none')}",
             f"Name from: {source}" + (f" · Pi-hole hostname {esc(dev.name)}" if dev.name and source != "Pi-hole hostname" else ""),
-            f"Groups: {esc(member)}",
-            f"First seen {esc(when(dev.first_seen))} · last lookup "
-            + (f"{ago(now - dev.last_query)} ago" if dev.last_query else "never"),
+            f"First seen {esc(when(dev.first_seen))}",
         ]
         if ip:
             try:
                 queries = self.api.queries_since(now - 86400, filters={"client_ip": ip})
                 top = Counter(apex(q.domain) for q in queries if q.domain).most_common(10)
-                lines += ["", f"<b>Top domains, last 24 h</b> ({len(queries):,} lookups)"]
-                lines += [f"{i}. <code>{esc(d)}</code> - {n:,}" for i, (d, n) in enumerate(top, 1)] or ["none"]
+                details.append(f"<b>Top domains, last 24 h</b> ({len(queries):,} lookups)")
+                details += [f"{i}. <code>{esc(d)}</code> - {n:,}" for i, (d, n) in enumerate(top, 1)] or ["none"]
             except Exception:
                 log.exception("telegram: reading queries for %s failed", ip)
-        device_of, device = self.det.state.device_of, self.det.state.device_of(mac)
-        recent = [r for r in self.det.alert_log.read(now - 30 * 86400, now) if device_of(r["device"]) == device]
-        recent.sort(key=lambda r: -r.get("time", 0))
-        lines += ["", "<b>Recent alerts</b>"]
-        lines += [f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r['rule'])}"
-                  + (f" · <code>{esc(r['domain'])}</code>" if r.get("domain") else "") for r in recent[:5]] or ["none in 30 days"]
-        return fit("\n".join(lines))
+        return layout("🔎", esc(self._name(dev)), facts, "/name renames it, and /group changes its groups.", details)
