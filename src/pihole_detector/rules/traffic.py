@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 from ..baseline import NEW
 from ..domains import subdomain_part
 from ..model import HIGH, MEDIUM, Query
-from . import BLOCKED_STATUSES, Context, QueryRule, Seen, make_alert
+from . import BLOCKED_STATUSES, Context, QueryRule, Seen, block_hint, make_alert
 
 TUNNEL_TYPES = {"TXT", "NULL", "ANY"}
 
@@ -69,7 +69,8 @@ class Tunneling(QueryRule):
             HIGH, self.name, seen, seen.apex,
             f"{seen.label} -> {seen.apex}: {', '.join(reasons)} in {int(cfg.tunnel_window // 60)} min "
             "(possible DNS tunneling / exfiltration)",
-            {"reasons": reasons, "samples": sorted(window.subs)[:5]},
+            {"reasons": reasons, "samples": sorted(window.subs)[:5],
+             "block": None if q.status in BLOCKED_STATUSES else block_hint(seen.apex)},
         )]
 
     def prune(self, now: float) -> None:
@@ -118,7 +119,7 @@ class Beaconing(QueryRule):
         return [make_alert(
             MEDIUM, self.name, seen, q.domain,
             f"{seen.label} resolves {q.domain} every ~{mean:.0f}s (jitter {cv:.2f}) - possible beaconing",
-            {"interval_s": round(mean, 1), "cv": round(cv, 3), "hits": len(times)},
+            {"interval_s": round(mean, 1), "cv": round(cv, 3), "hits": len(times), "block": block_hint(q.domain)},
         )]
 
     def prune(self, now: float) -> None:

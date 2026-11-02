@@ -438,3 +438,34 @@ def test_the_next_digest_is_today_before_digest_hour_and_tomorrow_after(make_det
     midnight = 1_760_400_000.0
     assert det.next_digest(midnight + 8 * 3600) == midnight + 9 * 3600
     assert det.next_digest(midnight + 9 * 3600) == midnight + 33 * 3600
+
+
+# block commands ---------------------------------------------------------------------
+def block_of(alerts):
+    return [a.evidence.get("block") for a in alerts]
+
+
+def test_dga_single_gives_the_command_to_block_its_apex(make_detector):
+    det = make_detector()
+    alerts = det.process_query(q("www.xk7qz9w2vb4m.com"))
+    assert block_of(alerts) == ["sudo docker exec pihole pihole --wild xk7qz9w2vb4m.com"]
+
+
+def tunnel(det, status="FORWARDED"):
+    alerts = []
+    for i in range(50):
+        alerts += det.process_query(q(f"s{i}.exfil.example", t=i, status=status))
+    return alerts
+
+
+def test_tunneling_gives_the_command_to_block_its_apex(make_detector):
+    assert block_of(tunnel(make_detector())) == ["sudo docker exec pihole pihole --wild exfil.example"]
+
+
+def test_tunneling_already_blocked_gives_no_command(make_detector):
+    assert block_of(tunnel(make_detector(), status="GRAVITY")) == [None]
+
+
+def test_beaconing_gives_the_command_to_block_its_apex(make_detector):
+    hits = beacon(make_detector(beacon_min_hits=10), 11, 60.0, domain="c2.beacon-host.example")
+    assert block_of(hits) == ["sudo docker exec pihole pihole --wild beacon-host.example"]

@@ -204,3 +204,11 @@ def test_preview_sends_the_sample_alert_with_working_buttons_when_the_bot_is_on(
     tg2 = FakeTelegram()
     cmd_preview(Config(telegram_chat_id="42"), tg=tg2, state=State())
     assert "reply_markup" not in tg2.payloads()[0] and "pihole --wild evil-c2.example" in tg2.payloads()[0]["text"]
+
+
+def test_a_pushed_tunneling_alert_has_a_block_button_for_its_apex(make_detector, tmp_path):
+    bot, det, api = setup(make_detector, tmp_path)
+    for i in range(50):
+        det.process_query(q(f"s{i}.exfil.example", t=i))
+    bot.handle(press(button(det, "Block exfil.example")["callback_data"]), T0 + 100)
+    assert api.calls == [("add_domain", "deny", "regex", r"(\.|^)exfil\.example$")]

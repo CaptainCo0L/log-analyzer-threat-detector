@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 from ..domains import looks_random, registrable_label
 from ..baseline import KNOWN
 from ..model import HIGH, MEDIUM, Query
-from . import BLOCKED_STATUSES, Context, QueryRule, Seen, make_alert
+from . import BLOCKED_STATUSES, Context, QueryRule, Seen, block_hint, make_alert
 
 
 def _candidate(q: Query, ctx: Context) -> bool:
@@ -46,7 +46,7 @@ class DgaSingle(QueryRule):
         return [make_alert(
             MEDIUM, self.name, seen, q.domain,
             f"{seen.label} resolved random-looking domain {q.domain}",
-            {"label": label, "reply": q.reply, "status": q.status},
+            {"label": label, "reply": q.reply, "status": q.status, "block": block_hint(q.domain)},
         )]
 
 

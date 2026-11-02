@@ -10,8 +10,8 @@ alerts to Telegram and sends a daily digest.
 > [Telegram bot](#telegram-commands-bot_enabledtrue) when you tell it to, and
 > [rotation sync](#rotation-sync-rotation_synctrue) by itself. It also contacts devices on the LAN to
 > learn their names ([mDNS, SSDP, NetBIOS and nmap](#device-names)). Alerts are **triage signals for a
-> human, not proof of compromise.** Threat-intel, DoH and IoT alerts on a domain that resolved give the
-> exact command to block it by hand.
+> human, not proof of compromise.** An alert about one domain that Pi-hole didn't block gives the exact
+> command to block it by hand.
 
 ## Why DNS
 
