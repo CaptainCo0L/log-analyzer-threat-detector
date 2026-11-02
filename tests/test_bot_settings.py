@@ -35,7 +35,7 @@ def local(hour, minute=0):
 
 
 def pushes(det):
-    return [m for m in det.telegram.messages if "Malware" in m and "While" not in m]  # not the summary
+    return [m for m in det.telegram.messages if "known bad domain" in m]  # not the summary, which has the title
 
 
 # --- /mute ---------------------------------------------------------------------------------

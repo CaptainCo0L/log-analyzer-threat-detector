@@ -53,52 +53,74 @@ def when(ts: float) -> str:
     return time.strftime("%a %d %b · %H:%M", time.localtime(ts))
 
 
-def detail(alert: Alert) -> str:
-    """One plain sentence with the rule-specific facts."""
+HEADLINES = {
+    "ti_match": "{label} looked up a known bad domain",
+    "tunneling": "{label} may be sending data out through DNS",
+    "nxdomain_burst": "{label} is failing on lots of random domains",
+    "new_device": "New device on your network: {label}",
+}
+
+
+def headline(alert: Alert) -> str:
+    """Who did what, in one line: the only part of a push that must be read."""
+    template = HEADLINES.get(alert.rule)
+    return template.format(label=alert.label) if template else f"{alert.label}: {rule_title(alert.rule)}"
+
+
+def outcome(alert: Alert) -> str:
+    """The one fact that decides what to do next."""
     ev = alert.evidence or {}
     rule = alert.rule
     if rule == "ti_match":
-        status = "Blocked by Pi-hole." if ev.get("block") is None else "⚠️ Not blocked - it resolved normally."
-        via = f" (via CNAME {ev['cname']})" if ev.get("cname") else ""
-        return f"{status}{via} List entry: {ev.get('matched')}"
+        return "Pi-hole blocked it." if ev.get("block") is None else "It wasn't blocked, so the lookup went through."
     if rule == "tunneling":
-        return "Seen in 10 min: " + "; ".join(ev.get("reasons", []))
+        return "; ".join(ev.get("reasons", [])) + " in 10 min."
     if rule == "nxdomain_burst":
-        samples = ", ".join(ev.get("samples", [])[:3])
-        return f"{ev.get('unique')} failed lookups in 5 min, e.g. {samples}"
+        return f"{ev.get('unique')} failed lookups in 5 min."
     if rule == "new_device":
-        was = f" · was {ev['previous_mac']}" if ev.get("previous_mac") else ""
-        return f"Vendor: {ev.get('vendor') or 'unknown'} · IP: {', '.join(ev.get('ips') or []) or 'none'}{was}"
+        return f"Made by {ev['vendor']}." if ev.get("vendor") else "Unknown vendor."
     if rule == "beaconing":
-        return f"Every ~{ev.get('interval_s') or 0:.0f} s, {ev.get('hits')} times in a row"
+        return f"Every ~{ev.get('interval_s') or 0:.0f} s, {ev.get('hits')} times in a row."
     if rule == "device_silent":
-        return f"Silent for {ev.get('hours')} h"
+        return f"Silent for {ev.get('hours')} h."
     if rule == "iot_off_baseline":
-        return f"New domain for this device: {ev.get('apex')}"
+        return f"New domain for this device: {ev.get('apex')}."
     return ""
 
 
+def _technical(alert: Alert) -> list[str]:
+    """What an outcome leaves out, for whoever wants to dig."""
+    ev = alert.evidence or {}
+    lines = []
+    if ev.get("matched"):
+        lines.append(f"List entry: {ev['matched']}")
+    if ev.get("cname"):
+        lines.append(f"Via CNAME {ev['cname']}")
+    if alert.rule == "nxdomain_burst" and ev.get("samples"):
+        lines.append("For example: " + ", ".join(ev["samples"][:3]))
+    if ev.get("previous_mac"):
+        lines.append(f"Was {ev['previous_mac']}")
+    return lines
+
+
 def format_push(alert: Alert, hint: bool = True) -> str:
-    """The pushed alert. `hint=False` drops the "run on the NAS" block command, for when buttons carry it."""
-    title, meaning = RULES.get(alert.rule, (alert.rule, ""))
-    lines = [f"{SEVERITY_ICON.get(alert.severity, '⚪')} <b>{esc(title)}</b>", ""]
-    device = f"📱 <b>{esc(alert.label)}</b>"
-    extra = [part for part in (*alert.ips, alert.mac) if part and part != alert.label]
-    if extra:
-        device += f"  <i>{esc(' · '.join(extra))}</i>"
-    lines.append(device)
+    """The pushed alert: what happened, then the rest folded away. `hint=False` drops the "run on the NAS"
+    block command, for when buttons carry it. The quote comes last: button presses add a status after it."""
+    lines = [f"{SEVERITY_ICON.get(alert.severity, '⚪')} <b>{esc(headline(alert))}</b>"]
     if alert.domain:
-        lines.append(f"🌐 <code>{esc(alert.domain)}</code>")
-    facts = detail(alert)
-    if facts:
-        lines += ["", esc(facts)]
-    if meaning:
-        lines += ["", f"💡 {esc(meaning)}"]
+        lines.append(f"<code>{esc(alert.domain)}</code>")
+    fact = outcome(alert)
+    if fact:
+        lines.append(esc(fact))
     block = (alert.evidence or {}).get("block")
     if block and hint:
         lines += ["", "🛡 To block it, run on the NAS:", f"<code>{esc(block)}</code>"]
-    lines += ["", f"<i>{esc(when(alert.time))} · {esc(alert.severity)} · {esc(alert.rule)}</i>"]
-    return "\n".join(lines)
+    address = [part for part in (*alert.ips, alert.mac) if part and part != alert.label]
+    meaning = RULES.get(alert.rule, (alert.rule, ""))[1]
+    folded = [" · ".join(address), *_technical(alert), meaning,
+              f"{when(alert.time)} · {alert.severity} · {alert.rule}"]
+    body = "\n".join(esc(line) for line in folded if line)
+    return "\n".join([*lines, "", f"<blockquote expandable>{body}</blockquote>"])
 
 
 def _digest_item(r: dict) -> str:

@@ -223,7 +223,7 @@ def test_format_push_escapes_html_and_hides_duplicate_ip():
               message="m", mac="02:00:00:00:00:05", ips=("192.0.2.5",))
     text = format_push(a)
     assert "a&lt;b&gt;.example" in text and "<b>.example" not in text
-    assert "<i>02:00:00:00:00:05</i>" in text
+    assert "02:00:00:00:00:05" in text and "192.0.2.5 ·" not in text
 
 
 def test_html_rejected_falls_back_to_plain_text():

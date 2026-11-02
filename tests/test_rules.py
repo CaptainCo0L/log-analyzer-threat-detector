@@ -358,7 +358,7 @@ def test_high_alerts_pushed_only_when_enabled(make_detector):
     det = make_detector(push_enabled=True)
     det.process_query(q("evil-c2.example"))
     det.process_query(q("dns.google"))   # MEDIUM: digest only
-    assert len(det.telegram.messages) == 1 and "Malware / phishing domain" in det.telegram.messages[0]
+    assert len(det.telegram.messages) == 1 and "known bad domain" in det.telegram.messages[0]
     assert "pihole --wild evil-c2.example" in det.telegram.messages[0]
 
 
