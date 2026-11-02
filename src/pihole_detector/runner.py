@@ -9,6 +9,7 @@ that pushes the recovery.
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 from .sinks import format_down, format_up
@@ -57,3 +58,15 @@ class Runner:
         det.state.commit()
         # Back off while failing (3, 6, 12, 24, 30 s...) instead of retrying a login every poll.
         return min(cfg.poll_seconds * 2 ** min(self.failures, 4), 30) if self.failures else cfg.poll_seconds
+
+    def idle(self, seconds: float, clock=time.monotonic) -> None:
+        """Wait for the next poll, answering the bot the moment something arrives. The work stays on this
+        thread, so the SQLite state and the Pi-hole session are still never shared."""
+        if not self.bot:
+            time.sleep(seconds)
+            return
+        deadline = clock() + seconds
+        while (left := deadline - clock()) > 0:
+            if self.bot.wake.wait(left):
+                self.bot.pump(time.time())
+                self.det.state.commit()

@@ -164,7 +164,6 @@ def test_report_summarises_and_offers_the_full_report(make_detector):
     sent = [c for c in det.telegram.calls if c[0] == "sendDocument"][0]
     filename, content = sent[2]["document"]
     assert filename.endswith(".md") and b"# Pi-hole detector review" in content and b"evil-c2.example" in content
-    assert det.telegram.calls[-1][0] == "answerCallbackQuery"  # the spinner stops after the work
 
 
 def test_report_days_are_bounded_and_default_to_seven(make_detector):

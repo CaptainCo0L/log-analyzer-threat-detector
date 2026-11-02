@@ -1,7 +1,7 @@
 """Two-way Telegram bot: the owner's commands and button presses, answered from the detector's state.
 
-A background thread long-polls getUpdates and only queues what arrives. Every update is handled on
-the main loop's thread (`Bot.pump`), so the SQLite state and the Pi-hole session are never shared.
+A background thread long-polls getUpdates, queues what arrives and wakes the main loop. Every update is
+handled on the main loop's thread (`Bot.pump`), so the SQLite state and the Pi-hole session are never shared.
 Only the owner's private chat is answered: chat.id and from.id must both be TELEGRAM_CHAT_ID.
 """
 
@@ -55,6 +55,10 @@ MAX_PAUSE_MINUTES = 60
 STALE_SECONDS = 300
 ONLINE_SECONDS = 900
 MAX_REPORT_DAYS = 30
+# Said the moment a button is pressed; the result then appears in the chat. Telegram allows one answer per press.
+PRESS_TOASTS = {"block": "Blocking…", "unblock": "Unblocking…", "mute": "Muting…", "unmute": "Unmuting…",
+                "unmute_all": "Unmuting…", "ops": "Working…", "undo_rotation": "Undoing…",
+                "full_report": "Sending the full report…"}
 
 
 def _display_setting(value):
@@ -73,11 +77,13 @@ def ago(seconds: float) -> str:
 
 
 class TelegramPoller(threading.Thread):
-    """Long-polls getUpdates and queues each update. Touches nothing else."""
+    """Long-polls getUpdates, queues each update and sets `wake`. Touches nothing else."""
 
-    def __init__(self, telegram, inbox: queue.Queue, offset: int = 0, timeout: int = 25):
+    def __init__(self, telegram, inbox: queue.Queue, offset: int = 0, timeout: int = 25,
+                 wake: threading.Event | None = None):
         super().__init__(name="telegram-poller", daemon=True)
         self.telegram, self.inbox, self.offset, self.timeout = telegram, inbox, offset, timeout
+        self.wake = wake or threading.Event()
         self.stopping = threading.Event()
 
     def poll_once(self) -> int:
@@ -85,6 +91,8 @@ class TelegramPoller(threading.Thread):
         for update in updates:
             self.inbox.put(update)
             self.offset = max(self.offset, int(update.get("update_id", 0)) + 1)
+        if updates:
+            self.wake.set()
         return len(updates)
 
     def run(self) -> None:
@@ -102,7 +110,7 @@ def start_bot(det, api, run: bool = True):
     det.telegram.delete_webhook()
     det.telegram.set_commands(BOT_COMMANDS)
     bot = Bot(det, api, det.telegram)
-    bot.poller = TelegramPoller(det.telegram, bot.inbox, offset=int(det.state.get("bot_offset", 0)))
+    bot.poller = TelegramPoller(det.telegram, bot.inbox, offset=int(det.state.get("bot_offset", 0)), wake=bot.wake)
     if run:
         bot.poller.start()
     return bot
@@ -117,10 +125,12 @@ class Bot:
         self.owner = str(det.cfg.telegram_chat_id)
         self._strangers: set[str] = set()
         self.inbox: queue.Queue = queue.Queue()  # filled by the TelegramPoller
+        self.wake = threading.Event()            # set by the TelegramPoller when it does
         self.poller: TelegramPoller | None = None
 
     def pump(self, now: float) -> None:
         """Handle everything the poller queued; remember the offset so a restart doesn't replay it."""
+        self.wake.clear()  # before reading, so an update arriving meanwhile still wakes the loop
         while True:
             try:
                 update = self.inbox.get_nowait()
@@ -176,7 +186,8 @@ class Bot:
         if not handler:
             self.telegram.answer_callback(cb.get("id", ""), "Unknown button.")
             return
-        self.telegram.answer_callback(cb.get("id", ""), handler(payload, now, cb) or "")
+        self.telegram.answer_callback(cb.get("id", ""), PRESS_TOASTS.get(payload.get("kind"), ""))
+        handler(payload, now, cb)
 
     def reply(self, text: str, buttons=None) -> bool:
         return self.delivery.send(text, buttons)
@@ -194,24 +205,22 @@ class Bot:
                 return
         self.reply(esc(status), buttons=[row])
 
-    def press_block(self, payload: dict, now: float, cb: dict | None = None) -> str:
+    def press_block(self, payload: dict, now: float, cb: dict | None = None) -> None:
         domain = payload["domain"]
         if not self._apply(f"Block button {domain}", list_wild("deny", domain), now):
-            return "Failed"
+            return
         undo = self.delivery.button("↩️ Undo block", {"kind": "unblock", "domain": domain}, now)
         self._settle(cb, BLOCK_STATUS, domain, f"🛡 Blocked {domain} and all its subdomains for everyone.", [undo])
-        return "Blocked"
 
-    def press_unblock(self, payload: dict, now: float, cb: dict | None = None) -> str:
+    def press_unblock(self, payload: dict, now: float, cb: dict | None = None) -> None:
         domain = payload["domain"]
         block = list_wild("deny", domain)
         if not self._apply(f"Undo Block button {domain}", Change(block.undo or [], block.ops), now):
-            return "Failed"
+            return
         again = self.delivery.button(f"🛡 Block {domain}", {"kind": "block", "domain": domain}, now, "danger")
         self._settle(cb, BLOCK_STATUS, domain, f"↩️ Unblocked {domain}.", [again])
-        return "Unblocked"
 
-    def press_mute(self, payload: dict, now: float, cb: dict | None = None) -> str:
+    def press_mute(self, payload: dict, now: float, cb: dict | None = None) -> None:
         hours = payload["hours"]
         self.delivery.mute(payload["rule"], payload["ident"], now + hours * 3600)
         title = rule_title(payload["rule"])
@@ -219,29 +228,26 @@ class Bot:
         undo = self.delivery.button("🔔 Undo mute", {**payload, "kind": "unmute"}, now)
         self._settle(cb, MUTE_STATUS, "", f"🔕 Muted {title} for {payload['label']} for {span}, until "
                      f"{when(now + hours * 3600)}. Those alerts are still logged and in the daily report.", [undo])
-        return f"Muted for {span}"
 
-    def press_unmute(self, payload: dict, now: float, cb: dict | None = None) -> str:
+    def press_unmute(self, payload: dict, now: float, cb: dict | None = None) -> None:
         rule, ident, label = payload["rule"], payload["ident"], payload["label"]
         self.delivery.mute(rule, ident, 0)
         self._settle(cb, MUTE_STATUS, "", f"🔔 Unmuted {rule_title(rule)} for {label}.",
                      mute_row(self.det.state, rule, ident, label, now))
-        return "Unmuted"
 
-    def press_undo_rotation(self, payload: dict, now: float, cb: dict | None = None) -> str:
+    def press_undo_rotation(self, payload: dict, now: float, cb: dict | None = None) -> None:
         change, why_not = self.changes.pending_sync(payload["time"])
         if not change:
             self.reply(f"↩️ Not undone: {esc(why_not)}.")
-            return why_not[:200]
+            return
         try:
             self.changes.undo_sync(change, now)
         except Exception as exc:
             self.reply(f"⚠️ Undo failed part-way: {esc(exc)}. Check Pi-hole > Clients.")
-            return "Undo failed"
+            return
         restored = ", ".join(e["mac"] for e in change["deleted"]) or "nothing"
         self.reply(f"↩️ Undone for {esc(change['name'])}: removed <code>{change['added']['mac']}</code>, "
                    f"restored {esc(restored)}.")
-        return "Undone"
 
     # changes, as undoable lists of ops (see changes.py) ---------------------------------------
     def _change(self, command: str, change: Change, text: str, now: float, undo_label: str = "↩️ Undo",
@@ -265,10 +271,9 @@ class Bot:
             return None
         return [[self.delivery.button(label, {"kind": "ops", "ops": undo, "command": "undo", "text": text}, now)]]
 
-    def press_ops(self, payload: dict, now: float, cb: dict | None = None) -> str:
+    def press_ops(self, payload: dict, now: float, cb: dict | None = None) -> None:
         """An Undo, or a confirmed change: run the stored ops."""
-        ok = self._change(payload["command"], Change(payload["ops"], payload.get("undo")), payload["text"], now)
-        return "Done" if ok else "Failed"
+        self._change(payload["command"], Change(payload["ops"], payload.get("undo")), payload["text"], now)
 
     def _domain_arg(self, args, usage: str) -> tuple[str | None, str | None]:
         """(mode, domain) from "[exact|wild] <domain>", or (None, None) after replying with usage."""
@@ -416,12 +421,11 @@ class Bot:
     def cmd_unmute(self, args, now) -> None:
         self.press_unmute_all({}, now)
 
-    def press_unmute_all(self, payload: dict, now: float, cb: dict | None = None) -> str:
+    def press_unmute_all(self, payload: dict, now: float, cb: dict | None = None) -> None:
         self.delivery.mute_all(0)
         held = self.delivery.held
         quiet = " Quiet hours still apply." if self.delivery.hold_reason(now) else ""
         self.reply(f"🔔 Unmuted.{quiet}" + (f" The {held} held alert{'s' if held != 1 else ''} follow." if held and not quiet else ""))
-        return "Unmuted"
 
     def cmd_quiet(self, args, now) -> None:
         if not args:
@@ -545,13 +549,12 @@ class Bot:
         full = self.delivery.button("📄 Full report", {"kind": "full_report", "days": days, "end": now}, now)
         self.reply("\n".join(lines), buttons=[[full]])
 
-    def press_full_report(self, payload: dict, now: float, cb: dict | None = None) -> str:
+    def press_full_report(self, payload: dict, now: float, cb: dict | None = None) -> None:
         days, end = payload["days"], payload["end"]
         records = self._records(days, end)
         text = build_report(records, end - days * 86400, end, push_cap=self.det.cfg.push_cap_per_hour)
         name = f"pihole-report-{time.strftime('%Y-%m-%d', time.localtime(end))}-{days}d.md"
         self.telegram.send_document(name, text.encode("utf-8"), caption=f"Alerts of the last {days} days")
-        return "Sending the full report"
 
     # /devices -------------------------------------------------------------------------------
     def _groups_by_mac(self) -> tuple[dict[str, tuple[int, ...]], dict[int, str]]:

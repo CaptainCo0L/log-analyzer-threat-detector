@@ -111,7 +111,7 @@ def cmd_run(cfg: Config) -> int:
     runner = Runner(det, api, time.time(), bot=bot, heartbeat=HEARTBEAT)
     log.info("running: push=%s poll=%.1fs threat domains=%d", cfg.push_enabled, cfg.poll_seconds, len(det.intel.threats))
     while not stopping:
-        time.sleep(runner.poll(time.time()))
+        runner.idle(runner.poll(time.time()))
 
     log.info("stopping")
     api.logout()
