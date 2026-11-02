@@ -52,6 +52,16 @@ class Query:
 
 
 @dataclass(frozen=True)
+class Client:
+    """One Pi-hole Clients entry. `client` is the string Pi-hole stores (and wants back in URLs)."""
+
+    mac: str
+    client: str
+    comment: str
+    groups: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class Device:
     """One entry of `/api/network/devices`."""
 

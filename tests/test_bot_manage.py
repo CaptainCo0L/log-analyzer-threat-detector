@@ -3,8 +3,7 @@
 import json
 
 from pihole_detector.bot import Bot
-from pihole_detector.model import Device
-from pihole_detector.rotation import Client
+from pihole_detector.model import Client, Device
 from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0, FakePihole
 
 OWNER = 42

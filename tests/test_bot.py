@@ -4,7 +4,7 @@ import queue
 
 from pihole_detector.bot import BOT_COMMANDS, Bot, TelegramPoller, drain
 from pihole_detector.model import Alert, Device, Query
-from pihole_detector.rotation import Client
+from pihole_detector.model import Client
 from pihole_detector.state import State
 from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0, FakePihole
 

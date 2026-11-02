@@ -3,9 +3,8 @@
 import json
 import time
 
-from pihole_detector.model import Device
+from pihole_detector.model import Client, Device
 from pihole_detector.namestore import NameStore
-from pihole_detector.rotation import Client
 from conftest import T0, FakePihole
 
 IPAD_OLD, IPAD_OLDER, IPAD_NEW = "02:00:00:00:00:30", "0a:00:00:00:00:29", "06:00:00:00:00:31"

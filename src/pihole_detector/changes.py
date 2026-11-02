@@ -20,7 +20,8 @@ from pathlib import Path
 from . import yearlog
 from .domains import apex
 from .names import same_name
-from .rotation import DEFAULT_GROUP, Client, SyncPlan
+from .model import Client
+from .rotation import DEFAULT_GROUP, SyncPlan
 from .sinks import when
 from .source import NotFound, PiholeClient
 from .state import State

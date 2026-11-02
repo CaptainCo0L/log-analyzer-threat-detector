@@ -10,22 +10,12 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass, field
 
-from .model import is_private
+from .model import Client, is_private
 from .names import same_name
 
 TRUSTED = ("mDNS", "Bonjour")
 DEFAULT_GROUP = 0
 UNDO = "sudo docker exec pihole-detector python -m pihole_detector clients-undo"
-
-
-@dataclass(frozen=True)
-class Client:
-    """One Pi-hole Clients entry. `client` is the string Pi-hole stores (and wants back in URLs)."""
-
-    mac: str
-    client: str
-    comment: str
-    groups: tuple[int, ...]
 
 
 @dataclass

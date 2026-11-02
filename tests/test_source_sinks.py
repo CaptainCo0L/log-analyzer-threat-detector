@@ -131,7 +131,7 @@ def test_devices_carry_their_last_query_time():
 
 
 def test_clients_lists_mac_entries_only_lowercased_but_keeps_pihole_spelling():
-    from pihole_detector.rotation import Client
+    from pihole_detector.model import Client
     assert PiholeApi("http://pihole:8081", "pw", opener=FakeFtl([])).clients() == [
         Client(mac="ea:65:e1:2f:e9:83", client="EA:65:E1:2F:E9:83", comment="iPad", groups=(0, 1))]
 
@@ -141,7 +141,7 @@ def test_groups_maps_ids_to_names():
 
 
 def test_client_writes_send_the_entry_and_reauthenticate_once():
-    from pihole_detector.rotation import Client
+    from pihole_detector.model import Client
     ftl = FakeFtl([], expire_after=2)  # the session dies on the first write
     api = PiholeApi("http://pihole:8081", "pw", opener=ftl)
     api.add_client(Client(mac="06:da:8f:c5:97:97", client="06:da:8f:c5:97:97", comment="iPad", groups=(0, 1)))

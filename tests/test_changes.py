@@ -1,7 +1,7 @@
 """Planning a change to Pi-hole Clients: the ops to run and the ops that reverse them."""
 
 from pihole_detector.changes import Change, rename, set_group
-from pihole_detector.rotation import Client
+from pihole_detector.model import Client
 
 A, B = "02:00:00:00:00:0a", "02:00:00:00:00:0b"
 ENTRY = Client(mac=A, client=A.upper(), comment="Old", groups=(0, 1))

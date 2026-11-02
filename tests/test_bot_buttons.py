@@ -5,8 +5,7 @@ import time
 
 from pihole_detector.bot import Bot
 from pihole_detector.changes import wild_regex
-from pihole_detector.model import Device
-from pihole_detector.rotation import Client
+from pihole_detector.model import Client, Device
 from conftest import T0, FakePihole, q
 
 OWNER = 42

@@ -1,6 +1,7 @@
 """plan_sync: which Pi-hole Clients entries follow a device onto its new private MAC."""
 
-from pihole_detector.rotation import Client, plan_sync
+from pihole_detector.model import Client
+from pihole_detector.rotation import plan_sync
 
 NEW = "06:da:8f:c5:97:97"
 OLD1 = "ea:65:e1:2f:e9:83"
