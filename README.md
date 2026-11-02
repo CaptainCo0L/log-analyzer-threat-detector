@@ -99,7 +99,8 @@ Pushed alerts carry buttons:
 - **🔕 Mute 24 h / 7 d** silences that rule for that device. The alerts are still logged and still in the daily report.
 - **📋 Copy block command** copies the NAS command, for when the bot isn't running.
 
-Every button reply has **↩️ Undo**. The rotation-sync message has Undo too: it reverses that change,
+Pressing Block or Mute changes that alert instead of adding a message: the result appears on it and the
+button becomes its **↩️ Undo**. Other button replies have Undo too. The rotation-sync message has one as well: it reverses that change,
 but only while it is the device's newest one (the same rule as `clients-undo`). The daily report has
 **📄 Full report**. `python -m pihole_detector preview` sends a sample alert with working buttons; its
 domain is under `.example`, which never resolves, so trying Block on it is harmless.

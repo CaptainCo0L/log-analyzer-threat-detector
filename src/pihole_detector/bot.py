@@ -14,11 +14,12 @@ import threading
 import time
 from collections import Counter
 
+from .cards import BLOCK_STATUS, MUTE_STATUS, set_status, swap_row
 from .changes import Change, list_exact, list_wild, rename, set_blocking, set_group
 from .domains import apex
 from .names import ipv4_of
 from .report import build_report
-from .delivery import APEX, MAX_MUTE, QUIET, in_quiet
+from .delivery import APEX, MAX_MUTE, QUIET, in_quiet, mute_row
 from .sinks import SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, rule_title, severity_line, when
 from .source import ApiError, PiholeClient
 from .model import HIGH, LOW, MEDIUM, is_private
@@ -175,38 +176,59 @@ class Bot:
         if not handler:
             self.telegram.answer_callback(cb.get("id", ""), "Unknown button.")
             return
-        self.telegram.answer_callback(cb.get("id", ""), handler(payload, now) or "")
+        self.telegram.answer_callback(cb.get("id", ""), handler(payload, now, cb) or "")
 
     def reply(self, text: str, buttons=None) -> bool:
         return self.delivery.send(text, buttons)
 
     # alert buttons --------------------------------------------------------------------------
-    def press_block(self, payload: dict, now: float) -> str:
-        domain = payload["domain"]
-        shown = f"<code>{esc(domain)}</code>"
-        ok = self._change(f"Block button {domain}", list_wild("deny", domain),
-                          f"🛡 Blocked {shown} and all its subdomains for everyone.", now,
-                          undo_text=f"↩️ Unblocked {shown}.")
-        return "Blocked" if ok else "Failed"
+    def _settle(self, cb: dict | None, family: tuple[str, ...], key: str, status: str, row: list[dict]) -> None:
+        """Show the result on the message whose button was pressed, with `row` in that button's place. Telegram
+        sends no text or keyboard for a message past 48 hours, and an edit can fail: those get a new message."""
+        message = (cb or {}).get("message") or {}
+        rows = (message.get("reply_markup") or {}).get("inline_keyboard")
+        if cb and message.get("text") and rows:
+            text = set_status(message["text"], family, key, status)
+            if self.telegram.edit(message["message_id"], text, swap_row(rows, cb.get("data") or "", row),
+                                  entities=message.get("entities") or []):
+                return
+        self.reply(esc(status), buttons=[row])
 
-    def press_mute(self, payload: dict, now: float) -> str:
+    def press_block(self, payload: dict, now: float, cb: dict | None = None) -> str:
+        domain = payload["domain"]
+        if not self._apply(f"Block button {domain}", list_wild("deny", domain), now):
+            return "Failed"
+        undo = self.delivery.button("↩️ Undo block", {"kind": "unblock", "domain": domain}, now)
+        self._settle(cb, BLOCK_STATUS, domain, f"🛡 Blocked {domain} and all its subdomains for everyone.", [undo])
+        return "Blocked"
+
+    def press_unblock(self, payload: dict, now: float, cb: dict | None = None) -> str:
+        domain = payload["domain"]
+        block = list_wild("deny", domain)
+        if not self._apply(f"Undo Block button {domain}", Change(block.undo or [], block.ops), now):
+            return "Failed"
+        again = self.delivery.button(f"🛡 Block {domain}", {"kind": "block", "domain": domain}, now, "danger")
+        self._settle(cb, BLOCK_STATUS, domain, f"↩️ Unblocked {domain}.", [again])
+        return "Unblocked"
+
+    def press_mute(self, payload: dict, now: float, cb: dict | None = None) -> str:
         hours = payload["hours"]
         self.delivery.mute(payload["rule"], payload["ident"], now + hours * 3600)
         title = rule_title(payload["rule"])
         span = f"{hours // 24} d" if hours >= 48 else f"{hours} h"
-        undo = self.delivery.button("↩️ Undo", {**payload, "kind": "unmute"}, now)
-        self.reply(f"🔕 Muted <b>{esc(title)}</b> for {esc(payload['label'])} for {span}, until "
-                   f"{esc(when(now + hours * 3600))}. Those alerts are still logged and in the daily report.",
-                   buttons=[[undo]])
+        undo = self.delivery.button("🔔 Undo mute", {**payload, "kind": "unmute"}, now)
+        self._settle(cb, MUTE_STATUS, "", f"🔕 Muted {title} for {payload['label']} for {span}, until "
+                     f"{when(now + hours * 3600)}. Those alerts are still logged and in the daily report.", [undo])
         return f"Muted for {span}"
 
-    def press_unmute(self, payload: dict, now: float) -> str:
-        self.delivery.mute(payload["rule"], payload["ident"], 0)
-        title = rule_title(payload["rule"])
-        self.reply(f"🔔 Unmuted <b>{esc(title)}</b> for {esc(payload['label'])}.")
+    def press_unmute(self, payload: dict, now: float, cb: dict | None = None) -> str:
+        rule, ident, label = payload["rule"], payload["ident"], payload["label"]
+        self.delivery.mute(rule, ident, 0)
+        self._settle(cb, MUTE_STATUS, "", f"🔔 Unmuted {rule_title(rule)} for {label}.",
+                     mute_row(self.det.state, rule, ident, label, now))
         return "Unmuted"
 
-    def press_undo_rotation(self, payload: dict, now: float) -> str:
+    def press_undo_rotation(self, payload: dict, now: float, cb: dict | None = None) -> str:
         change, why_not = self.changes.pending_sync(payload["time"])
         if not change:
             self.reply(f"↩️ Not undone: {esc(why_not)}.")
@@ -224,12 +246,17 @@ class Bot:
     # changes, as undoable lists of ops (see changes.py) ---------------------------------------
     def _change(self, command: str, change: Change, text: str, now: float, undo_label: str = "↩️ Undo",
                 undo_text: str = "↩️ Undone.") -> bool:
+        if not self._apply(command, change, now):
+            return False
+        self.reply(text, buttons=self._undo_button(change.undo, now, undo_label, undo_text))
+        return True
+
+    def _apply(self, command: str, change: Change, now: float) -> bool:
         try:
             self.changes.apply(change.ops, now, command)
         except Exception as exc:
             self.reply(f"⚠️ Pi-hole refused that: {esc(exc)}")
             return False
-        self.reply(text, buttons=self._undo_button(change.undo, now, undo_label, undo_text))
         return True
 
     def _undo_button(self, undo: list | None, now: float, label: str = "↩️ Undo",
@@ -238,7 +265,7 @@ class Bot:
             return None
         return [[self.delivery.button(label, {"kind": "ops", "ops": undo, "command": "undo", "text": text}, now)]]
 
-    def press_ops(self, payload: dict, now: float) -> str:
+    def press_ops(self, payload: dict, now: float, cb: dict | None = None) -> str:
         """An Undo, or a confirmed change: run the stored ops."""
         ok = self._change(payload["command"], Change(payload["ops"], payload.get("undo")), payload["text"], now)
         return "Done" if ok else "Failed"
@@ -389,7 +416,7 @@ class Bot:
     def cmd_unmute(self, args, now) -> None:
         self.press_unmute_all({}, now)
 
-    def press_unmute_all(self, payload: dict, now: float) -> str:
+    def press_unmute_all(self, payload: dict, now: float, cb: dict | None = None) -> str:
         self.delivery.mute_all(0)
         held = self.delivery.held
         quiet = " Quiet hours still apply." if self.delivery.hold_reason(now) else ""
@@ -518,7 +545,7 @@ class Bot:
         full = self.delivery.button("📄 Full report", {"kind": "full_report", "days": days, "end": now}, now)
         self.reply("\n".join(lines), buttons=[[full]])
 
-    def press_full_report(self, payload: dict, now: float) -> str:
+    def press_full_report(self, payload: dict, now: float, cb: dict | None = None) -> str:
         days, end = payload["days"], payload["end"]
         records = self._records(days, end)
         text = build_report(records, end - days * 86400, end, push_cap=self.det.cfg.push_cap_per_hour)

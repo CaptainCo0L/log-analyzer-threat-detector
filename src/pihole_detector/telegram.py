@@ -144,10 +144,14 @@ class Telegram:
         """Stops the button's spinner; `text` (<= 200 chars) shows as a toast."""
         return self._call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text[:200]})
 
-    def edit(self, message_id: int, text: str, buttons=None) -> bool:
+    def edit(self, message_id: int, text: str, buttons=None, entities: list | None = None) -> bool:
+        """Change a sent message. `text` is HTML, or plain with `entities` as its formatting."""
         payload = {"chat_id": self.chat_id, "message_id": message_id, "text": text[:TELEGRAM_LIMIT],
-                   "parse_mode": "HTML", "disable_web_page_preview": True,
-                   "reply_markup": {"inline_keyboard": buttons or []}}
+                   "disable_web_page_preview": True, "reply_markup": {"inline_keyboard": buttons or []}}
+        if entities is None:
+            payload["parse_mode"] = "HTML"
+        else:
+            payload["entities"] = entities
         return self._call("editMessageText", payload)
 
     def send_document(self, filename: str, content: bytes, caption: str = "") -> bool:

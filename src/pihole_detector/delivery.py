@@ -55,6 +55,12 @@ def action_button(state, label: str, payload: dict, now: float, style: str | Non
     return btn
 
 
+def mute_row(state, rule: str, ident: str, label: str, now: float) -> list[dict]:
+    mute = {"kind": "mute", "rule": rule, "ident": ident, "label": label}
+    return [action_button(state, "🔕 Mute 24 h", {**mute, "hours": 24}, now),
+            action_button(state, "🔕 Mute 7 d", {**mute, "hours": 168}, now)]
+
+
 def alert_buttons(state, alert, now: float) -> list[list[dict]]:
     """Block (when the domain resolved), mute this rule for this device, and the NAS command to copy."""
     rows = []
@@ -62,9 +68,7 @@ def alert_buttons(state, alert, now: float) -> list[list[dict]]:
     target = block_target(alert.evidence)
     if target:
         rows.append([action_button(state, f"🛡 Block {target}", {"kind": "block", "domain": target}, now, "danger")])
-    mute = {"kind": "mute", "rule": alert.rule, "ident": alert.device, "label": alert.label}
-    rows.append([action_button(state, "🔕 Mute 24 h", {**mute, "hours": 24}, now),
-                 action_button(state, "🔕 Mute 7 d", {**mute, "hours": 168}, now)])
+    rows.append(mute_row(state, alert.rule, alert.device, alert.label, now))
     if command and len(command) <= 256:  # copy_text holds 1-256 characters
         rows.append([{"text": "📋 Copy block command", "copy_text": {"text": command}}])
     return rows
