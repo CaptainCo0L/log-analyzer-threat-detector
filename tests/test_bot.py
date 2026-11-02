@@ -2,7 +2,7 @@
 
 import queue
 
-from pihole_detector.bot import BOT_COMMANDS, Bot, TelegramPoller, drain
+from pihole_detector.bot import BOT_COMMANDS, Bot, TelegramPoller
 from pihole_detector.model import Alert, Device, Query
 from pihole_detector.model import Client
 from pihole_detector.state import State
@@ -76,21 +76,19 @@ def test_poller_queues_updates_and_moves_the_offset_past_them(make_detector):
     assert det.telegram.payloads("getUpdates")[0]["offset"] == 10
 
 
-def test_drain_handles_each_update_and_remembers_the_offset(make_detector):
+def test_pump_handles_each_update_and_remembers_the_offset(make_detector):
     bot, det, _ = make_bot(make_detector)
-    inbox = queue.Queue()
-    inbox.put(message("/status", update_id=20))
-    inbox.put(message("/devices", update_id=21))
-    drain(inbox, bot, det.state, T0)
+    bot.inbox.put(message("/status", update_id=20))
+    bot.inbox.put(message("/devices", update_id=21))
+    bot.pump(T0)
     assert len(replies(det)) == 2 and det.state.get("bot_offset") == 22
 
 
 def test_one_bad_update_does_not_stop_the_rest(make_detector):
     bot, det, _ = make_bot(make_detector)
-    inbox = queue.Queue()
-    inbox.put({"update_id": 30, "message": "not a dict"})
-    inbox.put(message("/status", update_id=31))
-    drain(inbox, bot, det.state, T0)
+    bot.inbox.put({"update_id": 30, "message": "not a dict"})
+    bot.inbox.put(message("/status", update_id=31))
+    bot.pump(T0)
     assert len(replies(det)) == 1 and det.state.get("bot_offset") == 32
 
 
@@ -269,9 +267,19 @@ from pihole_detector.bot import start_bot
 def test_start_bot_clears_any_webhook_registers_the_menu_and_resumes_the_offset(make_detector):
     det = make_detector(telegram_chat_id=str(OWNER), bot_enabled=True)
     det.state.put("bot_offset", 77)
-    bot, inbox, poller = start_bot(det, FakePihole(), run=False)
+    bot = start_bot(det, FakePihole(), run=False)
     methods = [m for m, _, _ in det.telegram.calls]
-    assert methods[:2] == ["deleteWebhook", "setMyCommands"] and poller.offset == 77
+    assert methods[:2] == ["deleteWebhook", "setMyCommands"] and bot.poller.offset == 77
+
+
+def test_the_service_loop_answers_the_bot_on_every_poll(make_detector):
+    from pihole_detector.runner import Runner
+    det = make_detector(telegram_chat_id=str(OWNER), bot_enabled=True)
+    api = FakePihole()
+    bot = start_bot(det, api, run=False)
+    bot.inbox.put(message("/help"))
+    Runner(det, api, T0, bot=bot).poll(T0)
+    assert any("/whois" in text for text in replies(det))
 
 
 def test_bot_is_off_unless_enabled(make_detector):

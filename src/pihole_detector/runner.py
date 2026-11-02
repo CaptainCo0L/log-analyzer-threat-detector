@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .bot import drain
 from .sinks import format_down, format_up
 from .source import ApiError, PiholeClient, Tail
 
@@ -53,8 +52,7 @@ class Runner:
             if self.failures == cfg.fail_threshold and cfg.health_push_enabled:
                 det.delivery.send(format_down(self.failures, str(exc)))
         if self.bot:
-            bot, inbox, _ = self.bot
-            drain(inbox, bot, det.state, now)
+            self.bot.pump(now)
         det.tick(now)
         det.state.commit()
         # Back off while failing (3, 6, 12, 24, 30 s...) instead of retrying a login every poll.

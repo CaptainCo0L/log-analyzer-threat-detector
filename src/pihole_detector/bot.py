@@ -1,7 +1,7 @@
 """Two-way Telegram bot: the owner's commands and button presses, answered from the detector's state.
 
 A background thread long-polls getUpdates and only queues what arrives. Every update is handled on
-the main loop's thread (`drain`), so the SQLite state and the Pi-hole session are never shared.
+the main loop's thread (`Bot.pump`), so the SQLite state and the Pi-hole session are never shared.
 Only the owner's private chat is answered: chat.id and from.id must both be TELEGRAM_CHAT_ID.
 """
 
@@ -94,31 +94,17 @@ class TelegramPoller(threading.Thread):
 
 
 def start_bot(det, api, run: bool = True):
-    """(bot, inbox, poller) when BOT_ENABLED, else None. Clears any webhook (getUpdates is refused
+    """The bot, listening, when BOT_ENABLED, else None. Clears any webhook (getUpdates is refused
     while one is set) and registers the "/" menu for the owner's chat."""
     if not (det.cfg.bot_enabled and det.telegram.configured):
         return None
     det.telegram.delete_webhook()
     det.telegram.set_commands(BOT_COMMANDS)
-    inbox: queue.Queue = queue.Queue()
-    poller = TelegramPoller(det.telegram, inbox, offset=int(det.state.get("bot_offset", 0)))
+    bot = Bot(det, api, det.telegram)
+    bot.poller = TelegramPoller(det.telegram, bot.inbox, offset=int(det.state.get("bot_offset", 0)))
     if run:
-        poller.start()
-    return Bot(det, api, det.telegram), inbox, poller
-
-
-def drain(inbox: queue.Queue, bot: "Bot", state, now: float) -> None:
-    """Handle everything the poller queued; remember the offset so a restart doesn't replay it."""
-    while True:
-        try:
-            update = inbox.get_nowait()
-        except queue.Empty:
-            return
-        try:
-            bot.handle(update, now)
-        except Exception:
-            log.exception("telegram update %s failed", update.get("update_id"))
-        state.put("bot_offset", int(update.get("update_id", 0)) + 1)
+        bot.poller.start()
+    return bot
 
 
 class Bot:
@@ -129,6 +115,21 @@ class Bot:
         self.started = started if started is not None else time.time()
         self.owner = str(det.cfg.telegram_chat_id)
         self._strangers: set[str] = set()
+        self.inbox: queue.Queue = queue.Queue()  # filled by the TelegramPoller
+        self.poller: TelegramPoller | None = None
+
+    def pump(self, now: float) -> None:
+        """Handle everything the poller queued; remember the offset so a restart doesn't replay it."""
+        while True:
+            try:
+                update = self.inbox.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                self.handle(update, now)
+            except Exception:
+                log.exception("telegram update %s failed", update.get("update_id"))
+            self.det.state.put("bot_offset", int(update.get("update_id", 0)) + 1)
 
     # dispatch -------------------------------------------------------------------------------
     def _is_owner(self, chat: dict, sender: dict) -> bool:
