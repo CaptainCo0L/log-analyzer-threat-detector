@@ -201,9 +201,11 @@ def cmd_clients_undo(cfg: Config, api=None) -> int:
         print(why_not)
         return 1
     api = api or PiholeApi(cfg.pihole_url, cfg.pihole_password)  # log in only once there is work
+    state = State(cfg.state_db)
     try:
-        PiholeChanges(cfg, api).undo_sync(change, time.time())
+        PiholeChanges(cfg, api, state).undo_sync(change, time.time())
     finally:
+        state.close()
         if hasattr(api, "logout"):
             api.logout()
     print(f"undone: removed {change['added']['mac']}, restored "

@@ -96,13 +96,28 @@ def test_weekly_discovery_syncs_a_rotation_it_missed(make_detector, tmp_path):
 
 from pihole_detector.__main__ import cmd_clients_undo
 from pihole_detector.config import Config
+from pihole_detector.state import State
+
+
+def undo_config(tmp_path):
+    return Config(client_changes_path=str(tmp_path / "client_changes.jsonl"), state_db=str(tmp_path / "state.db"))
+
+
+def test_undo_from_the_cli_makes_the_new_mac_its_own_device_again(make_detector, tmp_path):
+    api = FakePihole(clients=[entry(IPAD_OLD), entry(IPAD_OLDER)])
+    rejoin(ipad_detector(make_detector, tmp_path, api))
+    service = State(tmp_path / "state.db")  # the running service's database, not the test's in-memory one
+    service.link_device(IPAD_NEW, IPAD_OLD)
+    service.close()
+    assert cmd_clients_undo(undo_config(tmp_path), api=api) == 0
+    assert State(tmp_path / "state.db").device_of(IPAD_NEW) == IPAD_NEW
 
 
 def test_undo_reverses_the_last_change_once(make_detector, tmp_path, capsys):
     api = FakePihole(clients=[entry(IPAD_OLD, "iPad (current)"), entry(IPAD_OLDER, "old iPad")])
     det = ipad_detector(make_detector, tmp_path, api)
     rejoin(det)
-    cfg = Config(client_changes_path=str(tmp_path / "client_changes.jsonl"))
+    cfg = undo_config(tmp_path)
     api.calls.clear()
     assert cmd_clients_undo(cfg, api=api) == 0
     assert api.calls == [("delete_client", IPAD_NEW), ("add_client", IPAD_OLDER.upper(), "old iPad", (0, 1))]

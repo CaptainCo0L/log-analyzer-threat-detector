@@ -23,6 +23,7 @@ from .names import same_name
 from .rotation import DEFAULT_GROUP, Client, SyncPlan
 from .sinks import when
 from .source import NotFound, PiholeClient
+from .state import State
 
 
 # Ops, built here so the op format stays in this module. Each returns a JSON-ready list.
@@ -108,9 +109,10 @@ def set_group(labels: dict[str, str], clients: list[Client], group: int, remove:
 
 
 class PiholeChanges:
-    def __init__(self, cfg, api: PiholeClient | None = None):
+    def __init__(self, cfg, api: PiholeClient | None = None, state: State | None = None):
         self.cfg = cfg
         self.api = api  # None while nothing may change Pi-hole
+        self.state = state  # where a rotation's device link lives, for undo
 
     # Telegram changes -----------------------------------------------------------------------
     def apply(self, ops: list, now: float, command: str) -> None:
@@ -197,10 +199,12 @@ class PiholeChanges:
         return change, None
 
     def undo_sync(self, change: dict, now: float) -> None:
-        """Remove the MAC the change added, re-add the ones it removed, and log the undo."""
+        """Remove the MAC the change added, re-add the ones it removed, unlink it and log the undo."""
         self.pihole.delete_client(change["added"]["client"])
         for entry in change["deleted"]:
             self.pihole.add_client(Client(**{**entry, "groups": tuple(entry["groups"])}))
+        if self.state:
+            self.state.unlink_device(change["added"]["mac"])
         self._log_sync({"time": now, "undo_of": change["time"]})
 
     # client_changes.jsonl is not rolled over yearly: undo has to see last year's changes too.

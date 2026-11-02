@@ -131,6 +131,10 @@ class State:
         )
         self.db.execute("DELETE FROM client_domain WHERE ident = ?", (moved,))
 
+    def unlink_device(self, mac: str) -> None:
+        """`mac` is its own device again. What link_device moved stays where it went."""
+        self.db.execute("DELETE FROM device_alias WHERE mac = ?", (mac,))
+
     # dedup --------------------------------------------------------------------
     def suppress(self, key: str, now: float, seconds: float) -> bool:
         """True if key is inside its suppression window; otherwise opens a new window."""

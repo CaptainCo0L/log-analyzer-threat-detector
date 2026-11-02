@@ -37,7 +37,7 @@ class Detector:
         self.cfg = cfg
         self.state = state
         self.settings = Settings(cfg, state)  # first: the saved /set values apply before anything reads cfg
-        self.changes = PiholeChanges(cfg, clients_api)  # rotation sync; no API leaves Pi-hole alone
+        self.changes = PiholeChanges(cfg, clients_api, state)  # rotation sync; no API leaves Pi-hole alone
         self.intel = intel
         self.directory = Directory(lambda: self.intel.names, names or NameStore(cfg.names_file))
         self.probe = probe

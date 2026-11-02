@@ -148,6 +148,14 @@ def test_the_rotation_message_has_an_undo_button_that_reverses_it(make_detector,
     assert "undo_of" in records[-1]
 
 
+def test_undoing_a_rotation_makes_the_new_mac_its_own_device_again(make_detector, tmp_path):
+    bot, det, api = rotation_setup(make_detector, tmp_path)
+    rotate(det, api)
+    assert det.state.device_of(IPAD_NEW) == IPAD_OLD
+    bot.handle(press(button(det, "Undo")["callback_data"]), T0 + 200)
+    assert det.state.device_of(IPAD_NEW) == IPAD_NEW
+
+
 def test_undo_on_an_older_rotation_is_refused_while_a_newer_one_stands(make_detector, tmp_path):
     bot, det, api = rotation_setup(make_detector, tmp_path)
     rotate(det, api)
