@@ -246,8 +246,9 @@ class Detector:
         sent = self.delivery.send(text, buttons)
         # The digest doubles as the heartbeat, so leave a trace of it either way.
         log.info("digest %s: %d alert(s)", "sent" if sent else "NOT sent", len(records))
-        self.state.put("last_digest", now)
-        self.state.put("last_digest_day", today)
-        self.stats.clear()
+        self.state.put("last_digest_day", today)  # either way: a failed send must not retry every poll
+        if sent:  # otherwise the window stays open and tomorrow's digest carries these alerts
+            self.state.put("last_digest", now)
+            self.stats.clear()
         self.state.commit()
         return True

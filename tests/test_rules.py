@@ -371,6 +371,28 @@ def test_digest_not_on_first_run_then_once_per_day(make_detector, monkeypatch):
     assert det.maybe_digest(morning + 24 * 3600) is False        # same day again
 
 
+def test_a_digest_that_failed_to_send_hands_its_alerts_to_the_next_one(make_detector, monkeypatch):
+    import time as _time
+    from pihole_detector.sinks import TelegramError
+    monkeypatch.setattr(_time, "localtime", _time.gmtime)
+
+    def telegram_down(method, payload=None, files=None, timeout=10):
+        raise TelegramError(None)
+
+    det = make_detector(digest_hour=9)
+    midnight = 1_760_400_000.0
+    morning = midnight + 10 * 3600
+    det.maybe_digest(morning)
+    det.process_query(q("dns.google", t=morning - T0 + 60))
+    det.telegram._api = telegram_down
+    assert det.maybe_digest(morning + 23 * 3600) is True         # tried and failed
+    del det.telegram._api
+    assert det.maybe_digest(morning + 24 * 3600) is False        # no retry on every poll that day
+    assert det.maybe_digest(morning + 47 * 3600) is True
+    assert "Encrypted DNS in use" in det.telegram.messages[-1]
+    assert "1 lookup checked" in det.telegram.messages[-1]
+
+
 def test_digest_and_hourly_stats_are_logged(make_detector, monkeypatch, caplog):
     import logging
     import time as _time
