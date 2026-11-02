@@ -16,7 +16,7 @@ from .directory import Directory
 from .names import best_probe, ipv4_of, is_ipv4
 from .namestore import NameStore
 from .model import HIGH, Alert, Device, Query
-from .rotation import format_sync, is_private, plan_sync
+from .rotation_handler import RotationHandler
 from .rules import Context, Seen
 from .rules.devices import IotOffBaseline, new_devices, silent_devices
 from .rules.intel_rules import DohBypass, ThreatIntelMatch
@@ -44,6 +44,7 @@ class Detector:
         self.alert_log = alert_log
         self.telegram = telegram
         self.delivery = Delivery(cfg, state, telegram)
+        self.rotations = RotationHandler(cfg, self.directory, self.changes, self.delivery)
         self.ctx = Context(cfg=cfg, state=state, intel=intel, noisy=DomainSet(cfg.noisy_apexes),
                            baseline=Baseline(state, cfg))
         self.rules = [ThreatIntelMatch(), DohBypass(), DgaSingle(), NxdomainBurst(),
@@ -117,8 +118,7 @@ class Detector:
             return None
         self.directory.names.update({dev.hwaddr: choice}, now)
         self.directory.names.save()
-        self.sync_rotation(dev.hwaddr, *choice, now)
-        old = self.directory.previous_mac(dev.hwaddr, *choice)
+        old = self.rotations.answered(dev.hwaddr, *choice, now, self.last_seen)
         return (old, choice[0]) if old else None
 
     def tick(self, now: float) -> list[Alert]:
@@ -171,44 +171,11 @@ class Detector:
                 best[ip_to_mac[ip]] = choice
         changes = self.directory.names.update(best, now)
         self.directory.names.save()
-        for mac, (name, source) in best.items():
-            if is_private(mac):  # one that was asleep when it joined is only found now
-                self.sync_rotation(mac, name, source, now)
+        for mac, (name, source) in best.items():  # one that was asleep when it joined is only found now
+            self.rotations.answered(mac, name, source, now, self.last_seen)
         for mac, old, new in changes:
             log.info("name for %s: %s -> %s", mac, old or "(none)", new)
         log.info("name discovery: %d device(s) answered of %d probed", len(best), len(ips))
-
-    def sync_rotation(self, mac: str, name: str, source: str, now: float) -> None:
-        """Move the device's Pi-hole Clients entry onto its new private MAC (see rotation.py). Every
-        change is logged for clients-undo and sent to Telegram. A failure leaves the alert as it was."""
-        api = self.changes.api
-        if not (self.cfg.rotation_sync and api):
-            return
-        try:
-            plan = plan_sync(mac, name, source, api.clients(), self.directory.names.entries,
-                             self.last_seen, self.cfg.rotation_keep)
-        except Exception:
-            log.exception("rotation sync for %s: reading Pi-hole Clients failed", mac)
-            return
-        if not plan.add:
-            if plan.reason != "already a Pi-hole client":
-                log.info("rotation sync for %s (%s): nothing done, %s", mac, name, plan.reason)
-            return
-        try:
-            deleted, error = self.changes.apply_sync(plan, name, now)
-        except Exception:
-            log.exception("rotation sync for %s: adding it to Pi-hole Clients failed", mac)
-            return
-        if error:
-            log.warning("rotation sync for %s: removing an old MAC failed: %s", mac, error)
-        log.info("rotation sync: %s added %s, removed %s", name, mac, [e.mac for e in deleted] or "none")
-        try:
-            groups = api.groups()
-        except Exception:
-            groups = {}
-        undo = ([[self.delivery.button("↩️ Undo", {"kind": "undo_rotation", "time": now}, now)]]
-                if self.cfg.bot_enabled else None)
-        self.delivery.send(format_sync(name, plan.add, deleted, groups, error), undo)
 
     # outputs ------------------------------------------------------------------
     def emit(self, alerts: list[Alert]) -> list[Alert]:
