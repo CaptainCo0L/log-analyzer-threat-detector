@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-from .sinks import CAPTION_LIMIT, TELEGRAM_LIMIT, strip_html
+from .sinks import TELEGRAM_LIMIT, strip_html
 
 log = logging.getLogger(__name__)
 
@@ -154,26 +154,22 @@ class Telegram:
             payload["entities"] = entities
         return self._call("editMessageText", payload)
 
-    def send_photo(self, png: bytes, caption: str, buttons=None) -> bool:
-        """A picture with an HTML caption. Unlike send, this can fail where text wouldn't: the caller falls back."""
+    def send_rich(self, html: str, buttons=None, links: bool = False) -> bool:
+        """A rich message from HTML. Unlike send, this can fail where text wouldn't: the caller falls back.
+        Telegram would turn domains into links, and a bad domain must never be one tap away: `links` is for
+        messages with no domains, so their /commands stay tappable."""
         self._space()
-        payload = {"chat_id": self.chat_id, "caption": caption[:CAPTION_LIMIT], "parse_mode": "HTML"}
+        payload: dict = {"chat_id": self.chat_id, "rich_message": {"html": html, "skip_entity_detection": not links}}
         if buttons:
-            payload["reply_markup"] = json.dumps({"inline_keyboard": buttons})
-        return self._call("sendPhoto", payload, files={"photo": ("card.png", png)})
+            payload["reply_markup"] = {"inline_keyboard": buttons}
+        return self._call("sendRichMessage", payload)
 
-    def edit_photo(self, message_id: int, png: bytes, caption: str, entities: list, buttons=None) -> bool:
-        """Replace a sent picture and its caption, which is plain text with `entities` as its formatting."""
-        media = {"type": "photo", "media": "attach://card", "caption": caption[:CAPTION_LIMIT],
-                 "caption_entities": entities}
-        return self._call("editMessageMedia", {
-            "chat_id": self.chat_id, "message_id": message_id, "media": json.dumps(media),
-            "reply_markup": json.dumps({"inline_keyboard": buttons or []})}, files={"card": ("card.png", png)})
-
-    def edit_caption(self, message_id: int, caption: str, entities: list, buttons=None) -> bool:
-        return self._call("editMessageCaption", {
-            "chat_id": self.chat_id, "message_id": message_id, "caption": caption[:CAPTION_LIMIT],
-            "caption_entities": entities, "reply_markup": {"inline_keyboard": buttons or []}})
+    def edit_rich(self, message_id: int, blocks: list[dict], buttons=None) -> bool:
+        """Change a sent rich message, from the blocks Telegram reported for it."""
+        return self._call("editMessageText", {
+            "chat_id": self.chat_id, "message_id": message_id,
+            "rich_message": {"blocks": blocks, "skip_entity_detection": True},
+            "reply_markup": {"inline_keyboard": buttons or []}})
 
     def send_document(self, filename: str, content: bytes, caption: str = "") -> bool:
         self._space()

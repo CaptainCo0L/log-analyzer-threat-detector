@@ -25,7 +25,7 @@ from .names import best_probe, build_names_report, ipv4_of
 from .alertlog import AlertLog
 from .report import build_report
 from .runner import Runner
-from .sinks import build_digest, digest_caption, format_push, format_test, push_caption
+from .sinks import build_digest, format_push, format_test, para, rich_digest, rich_push
 from .source import PiholeApi, read_replay
 from .state import State
 from .telegram import Telegram
@@ -256,10 +256,9 @@ def cmd_preview(cfg: Config, tg=None, state=None) -> int:
     stats = {"queries": 31204}
     banner = "🧪 <i>Example - not a real alert</i>\n\n"
     hint = not buttons
-    ok = delivery.send_card(delivery.render("alert_card", sample), banner + push_caption(sample, hint),
-                            banner + format_push(sample, hint=hint), buttons)
-    ok = delivery.send_card(delivery.render("digest_card", records, stats, now - 86400, now),
-                            banner + digest_caption(records, stats, now - 86400, now),
+    rich_banner = para("🧪 <i>Example - not a real alert</i>") + "\n"
+    ok = delivery.send_rich(rich_banner + rich_push(sample, hint), banner + format_push(sample, hint=hint), buttons)
+    ok = delivery.send_rich(rich_banner + rich_digest(records, stats, now - 86400, now),
                             banner + build_digest(records, stats, start=now - 86400, end=now)) and ok
     state.commit()
     if own:

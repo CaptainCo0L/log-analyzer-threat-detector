@@ -69,7 +69,7 @@ def test_after_a_block_the_button_becomes_its_undo_and_the_mutes_stay(make_detec
     bot, det, _ = setup(make_detector)
     press(bot, det, "Block")
     shown = labels(edits(det)[-1])
-    assert "↩️ Undo block" in shown and "🔕 Mute 24 h" in shown and "🔕 Mute 7 d" in shown
+    assert "Undo block" in shown and "Mute 24 h" in shown and "Mute 7 d" in shown
     assert not any("Block evil" in label for label in shown)
 
 
@@ -80,7 +80,7 @@ def test_undoing_a_block_changes_the_alert_back(make_detector):
     assert api.calls[-1] == ("delete_domain", "deny", "regex", REGEX)
     edit = edits(det)[-1]
     assert UNBLOCKED in edit["text"] and BLOCKED not in edit["text"].replace(UNBLOCKED, "")
-    assert "🛡 Block evil-c2.example" in labels(edit)
+    assert "Block evil-c2.example" in labels(edit)
 
 
 def test_it_can_be_blocked_again_after_an_undo(make_detector):
@@ -108,7 +108,7 @@ def test_mute_changes_the_alert_and_its_row_becomes_the_undo(make_detector):
     assert len(det.telegram.messages) == sent
     edit = edits(det)[-1]
     assert "🔕 Muted" in edit["text"] and "7 d" in edit["text"] and "in the digest" in edit["text"]
-    assert "🔔 Undo mute" in labels(edit) and not any("Mute 24" in label for label in labels(edit))
+    assert "Undo mute" in labels(edit) and not any("Mute 24" in label for label in labels(edit))
     assert any("Block" in label for label in labels(edit))
 
 
@@ -118,7 +118,7 @@ def test_undoing_a_mute_brings_both_mute_buttons_back(make_detector):
     press(bot, det, "Undo mute")
     edit = edits(det)[-1]
     assert "🔔 Unmuted" in edit["text"] and "🔕 Muted" not in edit["text"]
-    assert "🔕 Mute 24 h" in labels(edit) and "🔕 Mute 7 d" in labels(edit)
+    assert "Mute 24 h" in labels(edit) and "Mute 7 d" in labels(edit)
     pushes = len(det.telegram.messages)
     det.process_query(q("other.evil-c2.example", t=60))
     assert len(det.telegram.messages) == pushes + 1  # really lifted
@@ -146,7 +146,7 @@ def test_a_message_telegram_can_no_longer_show_gets_a_new_message(make_detector)
         "id": "cb1", "from": {"id": OWNER}, "data": data,
         "message": {"message_id": 55, "date": 0, "chat": {"id": OWNER, "type": "private"}}}}, T0 + 5)
     assert api.calls and edits(det) == []
-    assert BLOCKED in det.telegram.messages[-1] and "↩️ Undo block" in labels(det.telegram.payloads()[-1])
+    assert BLOCKED in det.telegram.messages[-1] and "Undo block" in labels(det.telegram.payloads()[-1])
 
 
 def test_a_failed_edit_still_tells_the_owner(make_detector):

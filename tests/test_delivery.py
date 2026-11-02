@@ -13,7 +13,7 @@ def alert(t, severity="HIGH"):
 
 
 def delivery(**cfg):
-    return Delivery(Config(push_enabled=True, image_cards=False, **cfg), State(":memory:"), FakeTelegram())
+    return Delivery(Config(push_enabled=True, rich_messages=False, **cfg), State(":memory:"), FakeTelegram())
 
 
 def test_the_push_cap_notice_points_at_the_digest():

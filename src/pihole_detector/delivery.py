@@ -15,7 +15,7 @@ from collections import deque
 
 from .alertlog import upgrade
 from .model import HIGH
-from .sinks import SEVERITY_ICON, esc, fit, format_push, needs_attention, push_caption, rule_title, when
+from .sinks import SEVERITY_ICON, esc, fit, format_push, needs_attention, rich_push, rule_title, when
 
 log = logging.getLogger(__name__)
 APEX = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")  # a plain domain: safe to put in a Block button
@@ -59,21 +59,21 @@ def action_button(state, label: str, payload: dict, now: float, style: str | Non
 
 def mute_row(state, rule: str, ident: str, label: str, now: float) -> list[dict]:
     mute = {"kind": "mute", "rule": rule, "ident": ident, "label": label}
-    return [action_button(state, "🔕 Mute 24 h", {**mute, "hours": 24}, now),
-            action_button(state, "🔕 Mute 7 d", {**mute, "hours": 168}, now)]
+    return [action_button(state, "Mute 24 h", {**mute, "hours": 24}, now),
+            action_button(state, "Mute 7 d", {**mute, "hours": 168}, now)]
 
 
 def alert_buttons(state, alert, now: float) -> list[list[dict]]:
-    """Block (when the domain resolved), mute this rule for this device, and the NAS command to copy."""
+    """Block when the domain resolved, else the NAS command to copy, then mute this rule for this device."""
     rows = []
     command = (alert.evidence or {}).get("block")
     target = block_target(alert.evidence)
     if target:
-        block = {"kind": "block", "domain": target, "alert": alert.to_dict()}  # the alert, to redraw its card
-        rows.append([action_button(state, f"🛡 Block {target}", block, now, "danger")])
-    rows.append(mute_row(state, alert.rule, alert.device, alert.label, now))
-    if command and len(command) <= 256:  # copy_text holds 1-256 characters
+        block = {"kind": "block", "domain": target, "alert": alert.to_dict()}  # the alert, to bring back its heading
+        rows.append([action_button(state, f"Block {target}", block, now, "primary")])
+    elif command and len(command) <= 256:  # copy_text holds 1-256 characters
         rows.append([{"text": "📋 Copy block command", "copy_text": {"text": command}}])
+    rows.append(mute_row(state, alert.rule, alert.device, alert.label, now))
     return rows
 
 
@@ -88,21 +88,9 @@ class Delivery:
         """A message that is not an alert push: never held, muted or capped."""
         return self.telegram.send(text, buttons=buttons)
 
-    def render(self, card: str, *args) -> bytes | None:
-        """A picture card from drawing.py, or None when pictures are off or it can't be drawn. Imported
-        here because Pillow is the one dependency: without it, messages stay text."""
-        if not self.cfg.image_cards:
-            return None
-        try:
-            from . import drawing
-            return getattr(drawing, card)(*args)
-        except Exception:
-            log.exception("drawing %s failed; sending text", card)
-            return None
-
-    def send_card(self, png: bytes | None, caption: str, text: str, buttons=None) -> bool:
-        """The picture and its caption, or `text` if there is no picture or Telegram refuses it."""
-        if png and self.telegram.send_photo(png, caption, buttons):
+    def send_rich(self, rich: str | None, text: str, buttons=None, links: bool = False) -> bool:
+        """The rich message, or `text` if there is none, they are off, or Telegram refuses it."""
+        if rich and self.cfg.rich_messages and self.telegram.send_rich(rich, buttons, links):
             return True
         return self.send(text, buttons)
 
@@ -134,8 +122,7 @@ class Delivery:
             return False
         self._over_cap = False
         self._pushed.append(now)
-        return self.send_card(self.render("alert_card", alert), push_caption(alert, hint),
-                              format_push(alert, hint=hint), buttons)
+        return self.send_rich(rich_push(alert, hint), format_push(alert, hint=hint), buttons)
 
     # holding --------------------------------------------------------------------------------
     def hold_reason(self, now: float) -> str | None:
@@ -184,7 +171,7 @@ class Delivery:
         """One Block button per domain that needs attention, HIGH alerts first."""
         urgent = sorted((r for r in records if needs_attention(r)), key=lambda r: r["severity"] != HIGH)
         targets = dict.fromkeys(t for r in urgent if (t := block_target(r.get("evidence"))))
-        return [[self.button(f"🛡 Block {t}", {"kind": "block", "domain": t}, now, "danger")]
+        return [[self.button(f"Block {t}", {"kind": "block", "domain": t}, now, "primary")]
                 for t in list(targets)[:limit]]
 
     # muting ---------------------------------------------------------------------------------

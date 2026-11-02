@@ -45,17 +45,27 @@ def test_wild_regex_matches_the_apex_and_its_subdomains_only():
 
 # --- a pushed alert ------------------------------------------------------------------------
 
-def test_an_unblocked_threat_push_has_block_mute_and_a_copyable_command(make_detector, tmp_path):
+def test_an_unblocked_threat_push_has_block_and_mute(make_detector, tmp_path):
     bot, det, _ = setup(make_detector, tmp_path)
     det.process_query(q("beacon.evil-c2.example"))
     payload = det.telegram.payloads()[0]
     labels = [b["text"] for b in keyboard(payload)]
     assert any("Block evil-c2.example" in label for label in labels)
-    assert button(det, "Block")["style"] == "danger"
+    assert button(det, "Block")["style"] == "primary"
     assert any("24 h" in label for label in labels) and any("7 d" in label for label in labels)
-    copy = button(det, "Copy")
-    assert copy["copy_text"]["text"] == "sudo docker exec pihole pihole --wild evil-c2.example"
+    assert not any("Copy" in label for label in labels)
     assert "run on the NAS" not in payload["text"]  # the button replaces the hint
+
+
+def test_a_domain_block_cant_take_offers_its_command_to_copy(make_detector, tmp_path):
+    from pihole_detector.delivery import alert_buttons
+    from pihole_detector.model import Alert
+    _, det, _ = setup(make_detector, tmp_path)
+    command = "sudo docker exec pihole pihole --wild under_score.example"
+    alert = Alert(time=T0, severity="HIGH", rule="ti_match", label="TV", domain="under_score.example", message="m",
+                  evidence={"block": command})
+    rows = alert_buttons(det.state, alert, T0)
+    assert rows[0][0]["copy_text"]["text"] == command and "Mute" in rows[1][0]["text"]
 
 
 def test_without_the_bot_the_push_keeps_the_text_hint_and_has_no_buttons(make_detector, tmp_path):
@@ -197,27 +207,27 @@ def test_preview_sends_the_sample_alert_with_working_buttons_when_the_bot_is_on(
     from pihole_detector.state import State
     from conftest import FakeTelegram
     tg, state = FakeTelegram(), State()
-    assert cmd_preview(Config(bot_enabled=True, telegram_chat_id="42", image_cards=False), tg=tg, state=state) == 0
+    assert cmd_preview(Config(bot_enabled=True, telegram_chat_id="42", rich_messages=False), tg=tg, state=state) == 0
     first = tg.payloads()[0]
     assert "Example" in first["text"] and "--wild" not in first["text"]
     block = next(b for row in first["reply_markup"]["inline_keyboard"] for b in row if "Block" in b["text"])
     payload = state.take_action(block["callback_data"][2:], time.time())
     assert (payload["kind"], payload["domain"]) == ("block", "evil-c2.example")
     tg2 = FakeTelegram()
-    cmd_preview(Config(telegram_chat_id="42", image_cards=False), tg=tg2, state=State())
+    cmd_preview(Config(telegram_chat_id="42", rich_messages=False), tg=tg2, state=State())
     assert "reply_markup" not in tg2.payloads()[0] and "pihole --wild evil-c2.example" in tg2.payloads()[0]["text"]
 
 
-def test_preview_sends_real_pictures_with_working_buttons():
+def test_preview_sends_rich_messages_with_working_buttons():
     from pihole_detector.__main__ import cmd_preview
     from pihole_detector.config import Config
     from pihole_detector.state import State
     from conftest import FakeTelegram
     tg = FakeTelegram()
     assert cmd_preview(Config(bot_enabled=True, telegram_chat_id="42"), tg=tg, state=State()) == 0
-    first, second = tg.payloads("sendPhoto")
-    assert "Example" in first["caption"] and "Block evil-c2.example" in first["reply_markup"]
-    assert "Example" in second["caption"] and tg.messages == []
+    first, second = tg.payloads("sendRichMessage")
+    assert "Example" in first["rich_message"]["html"] and "Block evil-c2.example" in str(first["reply_markup"])
+    assert "Example" in second["rich_message"]["html"] and tg.messages == []
 
 
 def test_a_pushed_tunneling_alert_has_a_block_button_for_its_apex(make_detector, tmp_path):

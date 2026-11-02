@@ -10,7 +10,7 @@ from collections import Counter
 from .model import HIGH, LOW, MEDIUM, Alert, join_address
 
 TELEGRAM_LIMIT = 4000
-CAPTION_LIMIT = 1024
+DIGEST_ROWS = 12    # alerts shown in a digest; the Full report has the rest
 SEVERITY_ICON = {HIGH: "🔴", MEDIUM: "🟠", LOW: "🟡"}
 
 # rule -> (title, what it means / what to do)
@@ -46,7 +46,7 @@ def severity_line(counts, zeros: bool = False) -> str:
                       for s in (HIGH, MEDIUM, LOW) if zeros or counts.get(s))
 
 
-def layout(icon: str, headline: str, facts=(), action: str = "", details=(), limit: int = TELEGRAM_LIMIT) -> str:
+def layout(icon: str, headline: str, facts=(), action: str = "", details=()) -> str:
     """Every message reads the same way: what happened, what matters about it, what you can do, then the
     technical rest folded away. All parts are HTML. One too long for Telegram loses lines from the end of
     its facts, then its details, so no tag is ever cut in two."""
@@ -62,10 +62,10 @@ def layout(icon: str, headline: str, facts=(), action: str = "", details=(), lim
             lines += ["", f"<blockquote expandable>{body}</blockquote>"]
         return "\n".join(lines).lstrip("\n")
 
-    if len(text()) <= limit:
+    if len(text()) <= TELEGRAM_LIMIT:
         return text()
     for lines in (facts, details):
-        while lines and len(text()) > limit - 20:
+        while lines and len(text()) > TELEGRAM_LIMIT - 20:
             lines.pop()
     facts.append("<i>… cut short</i>")
     return text()
@@ -98,7 +98,7 @@ def outcome(alert: Alert) -> str:
     ev = alert.evidence or {}
     rule = alert.rule
     if rule == "ti_match":
-        return "Pi-hole blocked it." if ev.get("block") is None else "It wasn't blocked, so the lookup went through."
+        return "Pi-hole blocked it." if ev.get("block") is None else "Pi-hole didn't block this lookup."
     if rule == "tunneling":
         return "; ".join(ev.get("reasons", [])) + " in 10 min."
     if rule == "nxdomain_burst":
@@ -138,13 +138,6 @@ def format_push(alert: Alert, hint: bool = True) -> str:
         facts.append(esc(fact))
     action, details = _push_rest(alert, hint)
     return layout(SEVERITY_ICON.get(alert.severity, "⚪"), esc(headline(alert)), facts, action, details)
-
-
-def push_caption(alert: Alert, hint: bool = True) -> str:
-    """What goes under an alert's picture: everything the picture leaves out."""
-    facts = [esc(headline(alert)), *([f"<code>{esc(alert.domain)}</code>"] if alert.domain else [])]
-    action, details = _push_rest(alert, hint)
-    return layout("", "", facts, action, details, CAPTION_LIMIT)
 
 
 def _push_rest(alert: Alert, hint: bool) -> tuple[str, list[str]]:
@@ -191,19 +184,6 @@ def _by_rule(records: list[dict]) -> dict[str, list[dict]]:
     return groups
 
 
-def digest_caption(records: list[dict], stats: dict, start: float, end: float) -> str:
-    """What goes under the digest's picture: a summary, then every alert folded away."""
-    by_severity = Counter(r["severity"] for r in records)
-    summary = ", ".join(f"{by_severity[s]} {s.lower()}" for s in (HIGH, MEDIUM, LOW) if by_severity[s])
-    failures = stats.get("api_failures", 0)
-    count = stats.get("queries", 0)
-    facts = [f"{summary} since the last digest", *([f"⚠️ {failures} failed polls"] if failures else [])]
-    groups = [line for rule, items in _by_rule(records).items() for line in _digest_group(rule, items)]
-    return layout("", "", facts, details=[
-        f"{count:,} lookup{'' if count == 1 else 's'} checked", esc(f"{when(start)} → {when(end)}"), *groups],
-        limit=CAPTION_LIMIT)
-
-
 def build_digest(records: list[dict], stats: dict, start: float | None = None, end: float | None = None) -> str:
     """One daily message. Always sent, even when empty: a missing digest means the detector died. A quiet day
     is one line; on a busy one, only what needs attention is in view."""
@@ -225,6 +205,87 @@ def build_digest(records: list[dict], stats: dict, start: float | None = None, e
     window = f"{when(start)} → {when(end)}" if start else ""
     return layout(icon, f"Digest: {esc(summary)}", facts, details=[
         *fold, esc(window), f"{lookups} checked", "Full details: data/alerts.jsonl on the NAS"])
+
+
+# --- rich messages: real headings, tables and folds. Each has a plain-text twin above, for when one is refused.
+
+def table(rows) -> str:
+    """Two columns of plain values: what it is on the left, its value on the right."""
+    cells = "".join(f'<tr><td>{esc(name)}</td><td align="right">{esc(value)}</td></tr>' for name, value in rows)
+    return f"<table>{cells}</table>"
+
+
+def para(html_text: str) -> str:
+    return f"<p>{html_text}</p>"
+
+
+def fold(summary: str, *parts: str) -> str:
+    return "\n".join((f"<details><summary>{esc(summary)}</summary>", *parts, "</details>"))
+
+
+def rich(heading: str, *parts: str) -> str:
+    """One state, one heading: `heading` is plain and starts with its dot. `parts` are HTML, in reading order."""
+    return "\n".join((f"<h3>{esc(heading)}</h3>", *(part for part in parts if part)))
+
+
+def push_heading(alert: Alert) -> str:
+    return f"{SEVERITY_ICON.get(alert.severity, '⚪')} {headline(alert)}"
+
+
+def _detail_rows(alert: Alert) -> list[tuple[str, str]]:
+    ev = alert.evidence or {}
+    samples = ev.get("samples") if alert.rule == "nxdomain_burst" else None
+    rows = [("Address", ", ".join(ip for ip in alert.ips if ip != alert.label)),
+            ("MAC", "" if alert.mac == alert.label else alert.mac or ""),
+            ("List entry", ev.get("matched")), ("Via CNAME", ev.get("cname")),
+            ("For example", ", ".join((samples or [])[:3])), ("Was", ev.get("previous_mac")),
+            ("Seen", when(alert.time)), ("Rule", f"{alert.rule}, {alert.severity.lower()}")]
+    return [(name, value) for name, value in rows if value]
+
+
+def rich_push(alert: Alert, hint: bool = True) -> str:
+    """The pushed alert: who did what and the one deciding fact, with the rest folded away."""
+    block = (alert.evidence or {}).get("block")
+    fact = outcome(alert)
+    return rich(push_heading(alert),
+                para(f"<code>{esc(alert.domain)}</code>") if alert.domain else "",
+                para(esc(fact)) if fact else "",
+                para("To block it, run on the NAS:") + f"\n<pre>{esc(block)}</pre>" if block and hint else "",
+                fold("Details", table(_detail_rows(alert)), para(esc(RULES.get(alert.rule, (alert.rule, ""))[1]))))
+
+
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
+
+def _digest_rows(records: list[dict]) -> list[tuple[str, str]]:
+    """One row per device and rule, the worst first."""
+    counts = Counter((r["severity"], r.get("label", "?"), r["rule"]) for items in _by_rule(records).values()
+                     for r in items)
+    rows = []
+    for (severity, label, rule), count in counts.items():
+        rows.append((f"{SEVERITY_ICON.get(severity, '⚪')} {label}",
+                     rule_title(rule) + (f" ×{count}" if count > 1 else "")))
+    return rows
+
+
+def rich_digest(records: list[dict], stats: dict, start: float, end: float) -> str:
+    """Only what needs attention is in view; a digest's Full report has the rest."""
+    urgent = [r for r in records if needs_attention(r)]
+    low = [r for r in records if not needs_attention(r)]
+    worst = next((s for s in (HIGH, MEDIUM, LOW) if any(r["severity"] == s for r in records)), LOW)
+    needs = "needs" if len(urgent) == 1 else "need"
+    title = f"{_plural(len(urgent), 'alert')} {needs} a look" if urgent else _plural(len(low), "low alert")
+    rows = _digest_rows(urgent)
+    more = len(rows) - DIGEST_ROWS
+    failures = stats.get("api_failures", 0)
+    return rich(f"{SEVERITY_ICON[worst]} Digest: {title}",
+                para(esc(f"{stats.get('queries', 0):,} lookups checked since {when(start)}")),
+                para(f"⚠️ {failures} failed polls") if failures else "",
+                table(rows[:DIGEST_ROWS]) if rows else "",
+                para(f"<i>+{more} more in the Full report</i>") if more > 0 else "",
+                fold(_plural(len(low), "low alert"), table(_digest_rows(low)[:DIGEST_ROWS])) if urgent and low
+                else table(_digest_rows(low)[:DIGEST_ROWS]) if low else "")
 
 
 def format_down(failures: int, reason: str) -> str:

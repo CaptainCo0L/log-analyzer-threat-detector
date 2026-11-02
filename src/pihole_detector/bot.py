@@ -14,13 +14,14 @@ import threading
 import time
 from collections import Counter
 
-from .cards import BLOCK_STATUS, MUTE_STATUS, set_status, swap_row
+from .cards import BLOCK_STATUS, MUTE_STATUS, set_rich_status, set_status, swap_row
 from .changes import Change, list_exact, list_wild, rename, set_blocking, set_group
 from .domains import apex
 from .names import ipv4_of
 from .report import build_report
 from .delivery import APEX, MAX_MUTE, QUIET, in_quiet, mute_row
-from .sinks import CAPTION_LIMIT, SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, layout, rule_title, severity_line, when
+from .sinks import (SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, fold, layout, para, push_heading, rich, rule_title,
+                    severity_line, table, when)
 from .source import ApiError, PiholeClient
 from .model import HIGH, LOW, MEDIUM, Alert, is_private
 
@@ -196,53 +197,51 @@ class Bot:
 
     # alert buttons --------------------------------------------------------------------------
     def _settle(self, cb: dict | None, family: tuple[str, ...], key: str, status: str, row: list[dict],
-                card: bytes | None = None) -> None:
-        """Show the result on the message whose button was pressed, with `row` in that button's place. Telegram
-        sends no text or keyboard for a message past 48 hours, and an edit can fail: those get a new message."""
+                heading: str = "", rich_status: str | None = None) -> None:
+        """Show the result on the message whose button was pressed, with `row` in that button's place. A rich
+        message can also take a new `heading`, and `rich_status` in place of `status` when that says it already.
+        Telegram sends nothing to edit for a message past 48 hours, an edit can fail, and an old picture has only
+        a caption: those get a new message."""
         message = (cb or {}).get("message") or {}
         rows = (message.get("reply_markup") or {}).get("inline_keyboard")
-        words = message.get("text") or message.get("caption")
-        if cb and words and rows:
-            text = set_status(words, family, key, status)
-            keyboard = swap_row(rows, cb.get("data") or "", row)
-            entities = message.get("entities") or message.get("caption_entities") or []
-            if "photo" not in message:
-                done = self.telegram.edit(message["message_id"], text, keyboard, entities=entities)
-            elif card:
-                done = self.telegram.edit_photo(message["message_id"], card, text, entities, keyboard)
-            else:
-                done = self.telegram.edit_caption(message["message_id"], text, entities, keyboard)
-            if done:
-                return
-        self.reply(esc(status), buttons=[row])
-
-    def _redraw(self, payload: dict, blocked: bool) -> bytes | None:
-        """The alert's card for this state. Only a pushed alert's buttons carry the alert."""
-        record = payload.get("alert")
-        return self.delivery.render("alert_card", Alert.from_dict(record), blocked) if record else None
+        blocks = (message.get("rich_message") or {}).get("blocks")
+        words = message.get("text")
+        done = False
+        if cb and rows and blocks:
+            note = status if rich_status is None else rich_status
+            done = self.telegram.edit_rich(message["message_id"], set_rich_status(blocks, family, key, note, heading),
+                                           swap_row(rows, cb.get("data") or "", row))
+        elif cb and rows and words:
+            done = self.telegram.edit(message["message_id"], set_status(words, family, key, status),
+                                      swap_row(rows, cb.get("data") or "", row), entities=message.get("entities") or [])
+        if not done:
+            self.reply(esc(status), buttons=[row])
 
     def press_block(self, payload: dict, now: float, cb: dict | None = None) -> None:
         domain = payload["domain"]
         if not self._apply(f"Block button {domain}", list_wild("deny", domain), now):
             return
-        undo = self.delivery.button("↩️ Undo block", {**payload, "kind": "unblock"}, now)
+        undo = self.delivery.button("Undo block", {**payload, "kind": "unblock"}, now)
+        pushed = "alert" in payload  # only a push is about this one domain, so only a push changes its heading
         self._settle(cb, BLOCK_STATUS, domain, f"🛡 Blocked {domain} and all its subdomains for everyone.", [undo],
-                     self._redraw(payload, blocked=True))
+                     f"🟢 Blocked {domain} and its subdomains" if pushed else "", "" if pushed else None)
 
     def press_unblock(self, payload: dict, now: float, cb: dict | None = None) -> None:
         domain = payload["domain"]
         block = list_wild("deny", domain)
         if not self._apply(f"Undo Block button {domain}", Change(block.undo or [], block.ops), now):
             return
-        again = self.delivery.button(f"🛡 Block {domain}", {**payload, "kind": "block"}, now, "danger")
-        self._settle(cb, BLOCK_STATUS, domain, f"↩️ Unblocked {domain}.", [again], self._redraw(payload, blocked=False))
+        again = self.delivery.button(f"Block {domain}", {**payload, "kind": "block"}, now, "primary")
+        record = payload.get("alert")
+        self._settle(cb, BLOCK_STATUS, domain, f"↩️ Unblocked {domain}.", [again],
+                     push_heading(Alert.from_dict(record)) if record else "")
 
     def press_mute(self, payload: dict, now: float, cb: dict | None = None) -> None:
         hours = payload["hours"]
         self.delivery.mute(payload["rule"], payload["ident"], now + hours * 3600)
         title = rule_title(payload["rule"])
         span = f"{hours // 24} d" if hours >= 48 else f"{hours} h"
-        undo = self.delivery.button("🔔 Undo mute", {**payload, "kind": "unmute"}, now)
+        undo = self.delivery.button("Undo mute", {**payload, "kind": "unmute"}, now)
         self._settle(cb, MUTE_STATUS, "", f"🔕 Muted {title} for {payload['label']} for {span}, until "
                      f"{when(now + hours * 3600)}. Those alerts are still logged and in the digest.", [undo])
 
@@ -545,13 +544,19 @@ class Bot:
         ]
         action = "\n".join(actions)
         calm = icon == "✅" and not stats.get("api_failures")
-        level = {"✅": "ok" if calm else "warn", "⚠️": "warn", "🚨": "down"}[icon]
-        png = self.delivery.render("status_card", level, "All good" if calm else summary.capitalize(), [
-            ("Pi-hole", health), ("Detector", f"Up {ago(now - self.started)}"),
-            ("Alerts", ", ".join(f"{counts[s]} {s.lower()}" for s in (HIGH, MEDIUM, LOW))),
-            ("Next digest", when(self.det.next_digest(now)))], when(now))
-        self.delivery.send_card(png, layout("", "", facts, action, details, CAPTION_LIMIT),
-                                layout(icon, f"Status: {summary}", facts, action, details))
+        shown = ", ".join(f"{counts[s]} {s.lower()}" for s in (HIGH, MEDIUM, LOW) if counts[s])
+        heading = "🟢 All good" if calm else f"{'⚠️' if icon == '✅' else icon} {summary[0].upper()}{summary[1:]}"
+        page = rich(heading,
+                    table([("Pi-hole", health), ("Alerts", shown or "None"),
+                           ("Next digest", when(self.det.next_digest(now)))]),
+                    *(para(fact) for fact in facts[1:]), *(para(esc(line)) for line in actions),
+                    fold("More", table([
+                        ("Detector", f"Up {ago(now - self.started)}"),
+                        (f"Lookups since {when(last) if last else 'start'}", f"{stats.get('queries', 0):,}"),
+                        ("Instant alerts", "On" if cfg.push_enabled else "Off"),
+                        ("Rotation sync", "On" if cfg.rotation_sync else "Off"),
+                        ("nmap", "On" if cfg.nmap_enabled else "Off")])))
+        self.delivery.send_rich(page, layout(icon, f"Status: {summary}", facts, action, details), links=True)
 
     # /report --------------------------------------------------------------------------------
     def _records(self, days: float, now: float) -> list[dict]:

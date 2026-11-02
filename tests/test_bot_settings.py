@@ -53,7 +53,7 @@ def test_mute_holds_high_alerts_then_sends_one_summary_when_it_ends(make_detecto
     summary = det.telegram.payloads()[-1]
     assert "2 alerts" in summary["text"] and "evil-c2.example" in summary["text"]
     blocks = [b["text"] for row in summary["reply_markup"]["inline_keyboard"] for b in row]
-    assert blocks == ["🛡 Block evil-c2.example"]      # one button per domain, not per alert
+    assert blocks == ["Block evil-c2.example"]      # one button per domain, not per alert
     det.tick(T0 + HOUR + 60)
     assert sum("While" in m for m in det.telegram.messages) == 1  # sent once
 

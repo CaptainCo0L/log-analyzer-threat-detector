@@ -95,7 +95,7 @@ def test_a_busy_digest_offers_a_block_and_the_full_report(make_detector):
     _, det, _ = bot_detector(make_detector)
     log_alert(det)
     det.maybe_digest(T0, force=True)
-    assert buttons(det) == ["🛡 Block xk7qz9w2vb4m.com", "📄 Full report"]
+    assert buttons(det) == ["Block xk7qz9w2vb4m.com", "📄 Full report"]
 
 
 def test_alerts_with_no_command_get_no_block_button(make_detector):
@@ -118,7 +118,7 @@ def test_one_domain_gets_one_button_and_high_alerts_come_first(make_detector):
     log_alert(det, domain="medium.example")
     log_alert(det, severity="HIGH", domain="high.example", rule="ti_match")
     det.maybe_digest(T0, force=True)
-    assert buttons(det) == ["🛡 Block high.example", "🛡 Block medium.example", "📄 Full report"]
+    assert buttons(det) == ["Block high.example", "Block medium.example", "📄 Full report"]
 
 
 def test_at_most_five_block_buttons(make_detector):
@@ -152,4 +152,4 @@ def test_blocking_from_the_digest_changes_the_digest(make_detector):
     edit = det.telegram.payloads("editMessageText")[-1]
     assert "Blocked xk7qz9w2vb4m.com" in edit["text"]
     labels = [b["text"] for row in edit["reply_markup"]["inline_keyboard"] for b in row]
-    assert labels == ["↩️ Undo block", "📄 Full report"]
+    assert labels == ["Undo block", "📄 Full report"]

@@ -39,7 +39,7 @@ def test_the_first_line_says_who_did_what(alert, lead):
 def test_the_domain_and_the_outcome_come_right_after():
     lines = format_push(push(block=BLOCK, matched="evil.example"), hint=False).split("\n")
     assert lines[1] == "<code>login.evil.example</code>"
-    assert lines[2] == "It wasn't blocked, so the lookup went through."
+    assert lines[2] == "Pi-hole didn't block this lookup."
 
 
 def test_a_blocked_lookup_says_pihole_stopped_it():
