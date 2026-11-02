@@ -5,10 +5,13 @@ Real-time threat detection for a home network, using the DNS queries that a
 seconds, runs a set of detection rules, writes every alert to a JSONL audit trail, pushes HIGH
 alerts to Telegram and sends a daily digest.
 
-> **Scope.** The detector only reads: the Pi-hole API and (read-only) `gravity.db`. It never
-> changes Pi-hole configuration, blocks anything or touches the network. Alerts are **triage
-> signals for a human, not proof of compromise.** Each alert carries the exact command to block
-> the domain by hand.
+> **Scope.** The detector watches: it reads the Pi-hole API and (read-only) `gravity.db`, and it never
+> blocks a domain on its own. Two optional features, both off by default, write to Pi-hole: the
+> [Telegram bot](#telegram-commands-bot_enabledtrue) when you tell it to, and
+> [rotation sync](#rotation-sync-rotation_synctrue) by itself. It also contacts devices on the LAN to
+> learn their names ([mDNS, SSDP, NetBIOS and nmap](#device-names)). Alerts are **triage signals for a
+> human, not proof of compromise.** Threat-intel, DoH and IoT alerts on a domain that resolved give the
+> exact command to block it by hand.
 
 ## Why DNS
 
@@ -119,10 +122,10 @@ PYTHONPATH=src THREAT_FILE=tests/fixtures/threats.txt EXTRA_IOT_CLIENTS=02:00:00
 ```
 
 ```text
-[HIGH] ti_match: pc.lan (192.0.2.10, 02:00:00:00:00:10) looked up threat-intel domain beacon.evil-c2.example (NOT blocked - resolved normally)
-[MEDIUM] doh_bypass: (192.0.2.30, 02:00:00:00:00:30) resolved DoH/DoT resolver dns.google; its later lookups may bypass Pi-hole
-[HIGH] nxdomain_burst: (192.0.2.30, 02:00:00:00:00:30) got NXDOMAIN for 20 random-looking names in 5 min (possible DGA malware hunting for its C2)
-[HIGH] tunneling: pc.lan (192.0.2.10, 02:00:00:00:00:10) -> exfil.example: 50 unique subdomains in 10 min (possible DNS tunneling / exfiltration)
+[HIGH] ti_match: pc.lan looked up threat-intel domain beacon.evil-c2.example (NOT blocked - resolved normally)
+[MEDIUM] doh_bypass: Example Corp device resolved DoH/DoT resolver dns.google; its later lookups may bypass Pi-hole
+[HIGH] nxdomain_burst: Example Corp device got NXDOMAIN for 20 random-looking names in 5 min (possible DGA malware hunting for its C2)
+[HIGH] tunneling: pc.lan -> exfil.example: 50 unique subdomains in 10 min (possible DNS tunneling / exfiltration)
 ...
 ```
 
@@ -172,7 +175,7 @@ sudo docker run --rm --network host --env-file /mnt/Home/apps/pihole/.env \
 
 ### Rotation sync (`ROTATION_SYNC=true`)
 
-The one thing that edits Pi-hole. Phones and tablets rotate their private Wi-Fi MAC, which drops
+The one change to Pi-hole nobody asks for. Phones and tablets rotate their private Wi-Fi MAC, which drops
 them out of any group set by MAC. When a new private MAC answers with an **mDNS/Bonjour** name that
 is saved for the device's other MACs (at join time, or in the weekly discovery if it was asleep), the
 service adds the new MAC to Pi-hole Clients with the comment and **all groups** of that device's most
