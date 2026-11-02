@@ -21,7 +21,7 @@ from .report import build_report
 from .rotation import is_private
 from .delivery import APEX, MAX_MUTE, QUIET, in_quiet
 from .sinks import RULES, SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, when
-from .source import PiholeClient
+from .source import ApiError, PiholeClient
 from .model import HIGH, LOW, MEDIUM
 
 log = logging.getLogger(__name__)
@@ -159,7 +159,10 @@ class Bot:
             self.reply("⌛ That command is from a while ago, so I didn't run it. Send it again if you still want it.")
             return
         handler = getattr(self, f"cmd_{command}", None) if command else None
-        (handler or self.cmd_help)(args, now)
+        try:
+            (handler or self.cmd_help)(args, now)
+        except ApiError as exc:  # a read the command needed failed: never leave the owner with silence
+            self.reply(f"🚨 Couldn't ask Pi-hole: {esc(exc)}")
 
     def on_press(self, cb: dict, now: float) -> None:
         data = cb.get("data") or ""

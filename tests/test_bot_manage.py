@@ -168,6 +168,20 @@ def test_name_needs_a_device_and_a_name(make_detector, tmp_path):
     assert api.calls == [] and "Usage" in det.telegram.messages[0] and "No device" in det.telegram.messages[1]
 
 
+def test_name_says_so_when_pihole_cant_list_its_clients(make_detector, tmp_path):
+    bot, det, api = setup(make_detector, tmp_path)
+    api.fail = {"clients": "GET /clients: HTTP 500"}
+    bot.handle(message("/name aswinpc Desktop"), T0)
+    assert api.calls == [] and "HTTP 500" in det.telegram.messages[-1]
+
+
+def test_group_says_so_when_pihole_cant_list_its_groups(make_detector, tmp_path):
+    bot, det, api = setup(make_detector, tmp_path)
+    api.fail = {"groups": "GET /groups: HTTP 500"}
+    bot.handle(message("/group aswinpc IoT"), T0)
+    assert api.calls == [] and "HTTP 500" in det.telegram.messages[-1]
+
+
 def test_group_adds_a_device_to_a_group_keeping_default(make_detector, tmp_path):
     bot, det, api = setup(make_detector, tmp_path)
     bot.handle(message(f"/group {IOT_MAC} iot"), T0)
