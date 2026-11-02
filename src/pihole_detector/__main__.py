@@ -25,9 +25,10 @@ from .names import best_probe, build_names_report, ipv4_of
 from .alertlog import AlertLog
 from .report import build_report
 from .runner import Runner
-from .sinks import Telegram, build_digest, format_push, format_test
+from .sinks import build_digest, format_push, format_test
 from .source import PiholeApi, read_replay
 from .state import State
+from .telegram import Telegram
 
 log = logging.getLogger("pihole_detector")
 HEARTBEAT = Path("/tmp/heartbeat")

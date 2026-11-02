@@ -380,7 +380,7 @@ def test_digest_not_on_first_run_then_once_per_day(make_detector, monkeypatch):
 
 def test_a_digest_that_failed_to_send_hands_its_alerts_to_the_next_one(make_detector, monkeypatch):
     import time as _time
-    from pihole_detector.sinks import TelegramError
+    from pihole_detector.telegram import TelegramError
     monkeypatch.setattr(_time, "localtime", _time.gmtime)
 
     def telegram_down(method, payload=None, files=None, timeout=10):

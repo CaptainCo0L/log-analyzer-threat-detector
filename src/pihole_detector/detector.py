@@ -24,9 +24,10 @@ from .rules.randomness import DgaSingle, NxdomainBurst
 from .rules.traffic import Beaconing, Tunneling
 from .delivery import Delivery
 from .alertlog import AlertLog
-from .sinks import Telegram, build_digest
+from .sinks import build_digest
 from .source import PiholeClient
 from .state import State
+from .telegram import Telegram
 
 log = logging.getLogger(__name__)
 

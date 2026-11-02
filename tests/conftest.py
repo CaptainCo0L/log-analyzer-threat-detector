@@ -9,7 +9,7 @@ from pihole_detector.detector import Detector
 from pihole_detector.intel import GravityIntel
 from pihole_detector.model import Device, Query
 from pihole_detector.alertlog import AlertLog
-from pihole_detector.sinks import Telegram
+from pihole_detector.telegram import Telegram
 from pihole_detector.state import State
 
 T0 = 1_760_000_000.0  # fixed clock; tests never read the wall clock

@@ -5,8 +5,9 @@ import urllib.error
 import pytest
 
 from pihole_detector.model import Alert
-from pihole_detector.sinks import Telegram, build_digest, format_push
+from pihole_detector.sinks import build_digest, format_push
 from pihole_detector.source import ApiError, NotFound, PiholeApi
+from pihole_detector.telegram import Telegram
 from conftest import T0
 
 
