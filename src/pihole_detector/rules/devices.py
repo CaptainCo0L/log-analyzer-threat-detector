@@ -17,7 +17,7 @@ class IotOffBaseline(QueryRule):
     name = "iot_off_baseline"
 
     def on_query(self, q: Query, seen: Seen, ctx: Context):
-        if (seen.ident not in ctx.intel.iot_clients or q.status in BLOCKED_STATUSES
+        if (seen.origin not in ctx.intel.iot_clients or q.status in BLOCKED_STATUSES
                 or ctx.noisy.match(q.domain)):
             return []
         if ctx.baseline.familiarity(seen.ident, seen.apex, seen.now).stage != NEW:

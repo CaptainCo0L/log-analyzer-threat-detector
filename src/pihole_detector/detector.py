@@ -44,7 +44,7 @@ class Detector:
         self.alert_log = alert_log
         self.telegram = telegram
         self.delivery = Delivery(cfg, state, telegram)
-        self.rotations = RotationHandler(cfg, self.directory, self.changes, self.delivery)
+        self.rotations = RotationHandler(cfg, state, self.directory, self.changes, self.delivery)
         self.ctx = Context(cfg=cfg, state=state, intel=intel, noisy=DomainSet(cfg.noisy_apexes),
                            baseline=Baseline(state, cfg))
         self.rules = [ThreatIntelMatch(), DohBypass(), DgaSingle(), NxdomainBurst(),
@@ -57,30 +57,30 @@ class Detector:
         self._last_stats = 0.0
 
     # identity -----------------------------------------------------------------
-    def identify(self, q: Query) -> tuple[str, str, str]:
-        """(ident, friendly label, address). Comment > discovered name > Pi-hole hostname > IP."""
+    def identify(self, q: Query) -> tuple[str, str, str, str]:
+        """(ident, origin, friendly label, address). Comment > discovered name > Pi-hole hostname > IP."""
         mac = self.directory.ip_to_mac.get(q.client_ip)
-        ident = mac or q.client_ip
+        ident = self.state.device_of(mac) if mac else q.client_ip
         hostname = q.client_name if q.client_name and q.client_name != q.client_ip else None
         label = self.directory.name(mac, q.client_ip) or hostname or q.client_ip
         address = " · ".join(filter(None, [q.client_ip, mac]))
         self.labels[ident] = label
-        return ident, label, address
+        return ident, mac or q.client_ip, label, address
 
     # inputs -------------------------------------------------------------------
-    def learn(self, q: Query) -> tuple[str, str, str]:
+    def learn(self, q: Query) -> tuple[str, str, str, str]:
         """Update baselines only. Used for every query, and alone for the --seed backfill."""
-        ident, label, address = self.identify(q)
+        ident, origin, label, address = self.identify(q)
         self.state.touch_client(ident, q.time)
         if q.domain:
             self.state.remember_domain(ident, apex(q.domain), q.time)
-        return ident, label, address
+        return ident, origin, label, address
 
     def process_query(self, q: Query) -> list[Alert]:
         self.stats["queries"] += 1
-        ident, label, address = self.learn(q)
+        ident, origin, label, address = self.learn(q)
         seen = Seen(ident=ident, label=label, apex=apex(q.domain) if q.domain else "", now=q.time,
-                    address=address)
+                    address=address, origin=origin)
         alerts: list[Alert] = []
         for rule in self.rules:
             try:

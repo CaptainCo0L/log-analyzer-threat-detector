@@ -14,15 +14,19 @@ log = logging.getLogger(__name__)
 
 
 class RotationHandler:
-    def __init__(self, cfg, directory, changes, delivery):
-        self.cfg, self.directory, self.changes, self.delivery = cfg, directory, changes, delivery
+    def __init__(self, cfg, state, directory, changes, delivery):
+        self.cfg, self.state, self.directory = cfg, state, directory
+        self.changes, self.delivery = changes, delivery
 
     def answered(self, mac: str, name: str, source: str, now: float, last_seen: dict[str, float]) -> str | None:
         """A MAC answered with this name. The device's previous MAC if that makes it a rotation, else None."""
         if not is_private(mac):
             return None
         self._sync(mac, name, source, now, last_seen)
-        return self.directory.previous_mac(mac, name, source)
+        old = self.directory.previous_mac(mac, name, source)
+        if old:
+            self.state.link_device(mac, old)
+        return old
 
     def _sync(self, mac: str, name: str, source: str, now: float, last_seen: dict[str, float]) -> None:
         """Move the device's Pi-hole Clients entry onto its new private MAC (see rotation.py). Every

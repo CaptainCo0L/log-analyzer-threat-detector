@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS client_domain (
 );
 CREATE INDEX IF NOT EXISTS idx_client_domain_apex ON client_domain (apex);
 CREATE TABLE IF NOT EXISTS device (hwaddr TEXT PRIMARY KEY, first_seen REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS device_alias (mac TEXT PRIMARY KEY, device TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS dedup (key TEXT PRIMARY KEY, until REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS action (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created REAL NOT NULL);
 """
@@ -100,6 +101,35 @@ class State:
 
     def add_device(self, hwaddr: str, now: float) -> None:
         self.db.execute("INSERT OR IGNORE INTO device (hwaddr, first_seen) VALUES (?, ?)", (hwaddr, now))
+
+    def device_of(self, mac: str) -> str:
+        """The identity everything per-device is kept under: the MAC itself unless it was linked to another."""
+        row = self.db.execute("SELECT device FROM device_alias WHERE mac = ?", (mac,)).fetchone()
+        return row[0] if row else mac
+
+    def link_device(self, mac: str, other: str) -> None:
+        """Make `mac` and `other` one device, moving what was recorded under `mac` to it."""
+        device, moved = self.device_of(other), self.device_of(mac)
+        if device == moved:
+            return
+        self.db.execute("UPDATE device_alias SET device = ? WHERE device = ?", (device, moved))
+        self.db.execute("INSERT OR REPLACE INTO device_alias (mac, device) VALUES (?, ?)", (moved, device))
+        self.db.execute(
+            "INSERT INTO client (ident, first_seen, last_seen, queries) "
+            "SELECT ?, first_seen, last_seen, queries FROM client WHERE ident = ? "
+            "ON CONFLICT(ident) DO UPDATE SET first_seen = min(first_seen, excluded.first_seen), "
+            "last_seen = max(last_seen, excluded.last_seen), queries = queries + excluded.queries, "
+            "silent_alerted = 0",
+            (device, moved),
+        )
+        self.db.execute("DELETE FROM client WHERE ident = ?", (moved,))
+        self.db.execute(
+            "INSERT INTO client_domain (ident, apex, first_seen) "
+            "SELECT ?, apex, first_seen FROM client_domain WHERE ident = ? "
+            "ON CONFLICT(ident, apex) DO UPDATE SET first_seen = min(first_seen, excluded.first_seen)",
+            (device, moved),
+        )
+        self.db.execute("DELETE FROM client_domain WHERE ident = ?", (moved,))
 
     # dedup --------------------------------------------------------------------
     def suppress(self, key: str, now: float, seconds: float) -> bool:

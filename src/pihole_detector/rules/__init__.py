@@ -33,11 +33,12 @@ class Context:
 
 @dataclass(frozen=True)
 class Seen:
-    ident: str          # MAC if known, else IP
+    ident: str          # the device, the same across its MACs (state.device_of); else the IP
     label: str          # friendly name (Pi-hole client comment / hostname), else the IP
     apex: str
     now: float
     address: str = ""   # "ip · mac"
+    origin: str = ""    # the MAC this query came from, else the IP: what Pi-hole's groups list
 
 
 def block_hint(domain: str) -> str:
