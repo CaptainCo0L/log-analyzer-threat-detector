@@ -10,6 +10,7 @@ from collections import Counter
 from .model import HIGH, LOW, MEDIUM, Alert, join_address
 
 TELEGRAM_LIMIT = 4000
+CAPTION_LIMIT = 1024
 SEVERITY_ICON = {HIGH: "🔴", MEDIUM: "🟠", LOW: "🟡"}
 
 # rule -> (title, what it means / what to do)
@@ -45,25 +46,26 @@ def severity_line(counts, zeros: bool = False) -> str:
                       for s in (HIGH, MEDIUM, LOW) if zeros or counts.get(s))
 
 
-def layout(icon: str, headline: str, facts=(), action: str = "", details=()) -> str:
+def layout(icon: str, headline: str, facts=(), action: str = "", details=(), limit: int = TELEGRAM_LIMIT) -> str:
     """Every message reads the same way: what happened, what matters about it, what you can do, then the
     technical rest folded away. All parts are HTML. One too long for Telegram loses lines from the end of
     its facts, then its details, so no tag is ever cut in two."""
     facts, details = list(facts), [line for line in details if line]
 
     def text() -> str:
-        lines = [f"{icon} <b>{headline}</b>", *facts]
+        lines = [f"{icon} <b>{headline}</b>"] if headline else []
+        lines += facts
         if action:
             lines += ["", action]
         if details:
             body = "\n".join(details)
             lines += ["", f"<blockquote expandable>{body}</blockquote>"]
-        return "\n".join(lines)
+        return "\n".join(lines).lstrip("\n")
 
-    if len(text()) <= TELEGRAM_LIMIT:
+    if len(text()) <= limit:
         return text()
     for lines in (facts, details):
-        while lines and len(text()) > TELEGRAM_LIMIT - 20:
+        while lines and len(text()) > limit - 20:
             lines.pop()
     facts.append("<i>… cut short</i>")
     return text()
@@ -134,14 +136,25 @@ def format_push(alert: Alert, hint: bool = True) -> str:
     fact = outcome(alert)
     if fact:
         facts.append(esc(fact))
+    action, details = _push_rest(alert, hint)
+    return layout(SEVERITY_ICON.get(alert.severity, "⚪"), esc(headline(alert)), facts, action, details)
+
+
+def push_caption(alert: Alert, hint: bool = True) -> str:
+    """What goes under an alert's picture: everything the picture leaves out."""
+    facts = [esc(headline(alert)), *([f"<code>{esc(alert.domain)}</code>"] if alert.domain else [])]
+    action, details = _push_rest(alert, hint)
+    return layout("", "", facts, action, details, CAPTION_LIMIT)
+
+
+def _push_rest(alert: Alert, hint: bool) -> tuple[str, list[str]]:
     block = (alert.evidence or {}).get("block")
     action = f"🛡 To block it, run on the NAS:\n<code>{esc(block)}</code>" if block and hint else ""
     address = [part for part in (*alert.ips, alert.mac) if part and part != alert.label]
     meaning = RULES.get(alert.rule, (alert.rule, ""))[1]
     folded = [" · ".join(address), *_technical(alert), meaning,
               f"{when(alert.time)} · {alert.severity} · {alert.rule}"]
-    return layout(SEVERITY_ICON.get(alert.severity, "⚪"), esc(headline(alert)), facts, action,
-                  [esc(line) for line in folded if line])
+    return action, [esc(line) for line in folded if line]
 
 
 def _digest_item(r: dict) -> str:
@@ -170,6 +183,27 @@ def _digest_group(rule: str, items: list[dict]) -> list[str]:
     return [title, *(_digest_item(r) for r in items[:3]), *more]
 
 
+def _by_rule(records: list[dict]) -> dict[str, list[dict]]:
+    order = {HIGH: 0, MEDIUM: 1, LOW: 2}
+    groups: dict[str, list[dict]] = {}
+    for r in sorted(records, key=lambda r: (order.get(r["severity"], 3), r["time"])):
+        groups.setdefault(r["rule"], []).append(r)
+    return groups
+
+
+def digest_caption(records: list[dict], stats: dict, start: float, end: float) -> str:
+    """What goes under the digest's picture: a summary, then every alert folded away."""
+    by_severity = Counter(r["severity"] for r in records)
+    summary = ", ".join(f"{by_severity[s]} {s.lower()}" for s in (HIGH, MEDIUM, LOW) if by_severity[s])
+    failures = stats.get("api_failures", 0)
+    count = stats.get("queries", 0)
+    facts = [f"{summary} since the last digest", *([f"⚠️ {failures} failed polls"] if failures else [])]
+    groups = [line for rule, items in _by_rule(records).items() for line in _digest_group(rule, items)]
+    return layout("", "", facts, details=[
+        f"{count:,} lookup{'' if count == 1 else 's'} checked", esc(f"{when(start)} → {when(end)}"), *groups],
+        limit=CAPTION_LIMIT)
+
+
 def build_digest(records: list[dict], stats: dict, start: float | None = None, end: float | None = None) -> str:
     """One daily message. Always sent, even when empty: a missing digest means the detector died. A quiet day
     is one line; on a busy one, only what needs attention is in view."""
@@ -181,11 +215,7 @@ def build_digest(records: list[dict], stats: dict, start: float | None = None, e
     end = end or time.time()
     facts = [f"⚠️ {failures} failed polls"] if failures else []
     fold: list[str] = []
-    order = {HIGH: 0, MEDIUM: 1, LOW: 2}
-    groups: dict[str, list[dict]] = {}
-    for r in sorted(records, key=lambda r: (order.get(r["severity"], 3), r["time"])):
-        groups.setdefault(r["rule"], []).append(r)
-    for rule, items in groups.items():
+    for rule, items in _by_rule(records).items():
         if needs_attention(items[0]):
             facts += ["", *_digest_group(rule, items)]
         else:

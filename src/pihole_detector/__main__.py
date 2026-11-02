@@ -13,7 +13,7 @@ from . import yearlog
 from .changes import PiholeChanges
 from .bot import start_bot
 from .config import Config
-from .delivery import alert_buttons
+from .delivery import Delivery, alert_buttons
 from .rules import block_hint
 from .detector import Detector
 from .discovery import discover, nmap_options
@@ -25,7 +25,7 @@ from .names import best_probe, build_names_report, ipv4_of
 from .alertlog import AlertLog
 from .report import build_report
 from .runner import Runner
-from .sinks import build_digest, format_push, format_test
+from .sinks import build_digest, digest_caption, format_push, format_test, push_caption
 from .source import PiholeApi, read_replay
 from .state import State
 from .telegram import Telegram
@@ -243,23 +243,27 @@ def cmd_preview(cfg: Config, tg=None, state=None) -> int:
         device="example", mac="02:00:00:00:00:30", ips=("192.0.2.30",), dedup="ti_match|example|evil-c2.example",
         message="example", evidence={"matched": "evil-c2.example", "block": block_hint("evil-c2.example")},
     )
-    buttons = None
-    if cfg.bot_enabled:
-        own = state is None
-        state = state or State(cfg.state_db)
-        buttons = alert_buttons(state, sample, now)
-        state.commit()
-        if own:
-            state.close()
-    report = build_digest([
+    own = state is None
+    state = state or State(cfg.state_db if cfg.bot_enabled else ":memory:")
+    delivery = Delivery(cfg, state, tg)
+    buttons = alert_buttons(state, sample, now) if cfg.bot_enabled else None
+    records = [
         {**sample.to_dict()},
         {"severity": "MEDIUM", "rule": "beaconing", "label": "AswinPC", "domain": "checkin.example",
          "evidence": {"interval_s": 60}, "time": now},
         {"severity": "LOW", "rule": "device_silent", "label": "iPad", "evidence": {"hours": 26}, "time": now},
-    ], {"queries": 31204}, start=now - 86400, end=now)
+    ]
+    stats = {"queries": 31204}
     banner = "🧪 <i>Example - not a real alert</i>\n\n"
-    ok = tg.send(banner + format_push(sample, hint=not buttons), buttons=buttons)
-    ok = tg.send(banner + report) and ok
+    hint = not buttons
+    ok = delivery.send_card(delivery.render("alert_card", sample), banner + push_caption(sample, hint),
+                            banner + format_push(sample, hint=hint), buttons)
+    ok = delivery.send_card(delivery.render("digest_card", records, stats, now - 86400, now),
+                            banner + digest_caption(records, stats, now - 86400, now),
+                            banner + build_digest(records, stats, start=now - 86400, end=now)) and ok
+    state.commit()
+    if own:
+        state.close()
     print("sent" if ok else "FAILED (see log)")
     return 0 if ok else 1
 

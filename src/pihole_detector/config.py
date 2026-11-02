@@ -45,6 +45,7 @@ class Config:
     push_enabled: bool = False              # shadow mode by default
     bot_enabled: bool = False               # answer the owner's commands and button presses
     health_push_enabled: bool = True        # "Pi-hole API unreachable" is pushed even in shadow mode
+    image_cards: bool = True                # pushes, the digest and /status as pictures (off: plain text)
     digest_hour: int = 9
     poll_seconds: float = 3.0
     devices_seconds: float = 60.0
@@ -101,6 +102,7 @@ SETTABLE = (
     "tunnel_long_label_count", "tunnel_txt_count", "beacon_min_hits", "beacon_max_cv", "beacon_min_interval",
     "beacon_max_interval", "silent_hours", "silent_min_queries", "dedup_hours", "digest_hour",
     "push_cap_per_hour", "rotation_sync", "rotation_keep", "nmap_enabled", "nmap_exclude", "push_enabled",
+    "image_cards",
 )
 BOUNDS = {"digest_hour": (0, 23), "rotation_keep": (1, 10), "push_cap_per_hour": (1, 1000)}
 

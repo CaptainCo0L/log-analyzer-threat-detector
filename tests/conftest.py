@@ -137,6 +137,7 @@ def make_detector(tmp_path):
     def factory(threats=("evil-c2.example",), iot=(IOT_MAC,), api=None, **cfg_overrides):
         cfg_overrides.setdefault("names_file", str(tmp_path / "names.json"))
         cfg_overrides.setdefault("pihole_changes_path", str(tmp_path / "pihole_changes.jsonl"))
+        cfg_overrides.setdefault("image_cards", False)  # tests read text; test_image_cards.py turns pictures on
         cfg = Config(gravity_db=str(tmp_path / "missing.db"), **cfg_overrides)
         intel = GravityIntel(tmp_path / "missing.db", "tif", "IoT", extra_threats=threats, extra_iot=iot)
         det = Detector(cfg, State(":memory:"), intel, AlertLog(tmp_path / "alerts.jsonl"), FakeTelegram(),

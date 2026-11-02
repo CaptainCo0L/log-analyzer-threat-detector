@@ -197,14 +197,27 @@ def test_preview_sends_the_sample_alert_with_working_buttons_when_the_bot_is_on(
     from pihole_detector.state import State
     from conftest import FakeTelegram
     tg, state = FakeTelegram(), State()
-    assert cmd_preview(Config(bot_enabled=True, telegram_chat_id="42"), tg=tg, state=state) == 0
+    assert cmd_preview(Config(bot_enabled=True, telegram_chat_id="42", image_cards=False), tg=tg, state=state) == 0
     first = tg.payloads()[0]
     assert "Example" in first["text"] and "--wild" not in first["text"]
     block = next(b for row in first["reply_markup"]["inline_keyboard"] for b in row if "Block" in b["text"])
-    assert state.take_action(block["callback_data"][2:], time.time()) == {"kind": "block", "domain": "evil-c2.example"}
+    payload = state.take_action(block["callback_data"][2:], time.time())
+    assert (payload["kind"], payload["domain"]) == ("block", "evil-c2.example")
     tg2 = FakeTelegram()
-    cmd_preview(Config(telegram_chat_id="42"), tg=tg2, state=State())
+    cmd_preview(Config(telegram_chat_id="42", image_cards=False), tg=tg2, state=State())
     assert "reply_markup" not in tg2.payloads()[0] and "pihole --wild evil-c2.example" in tg2.payloads()[0]["text"]
+
+
+def test_preview_sends_real_pictures_with_working_buttons():
+    from pihole_detector.__main__ import cmd_preview
+    from pihole_detector.config import Config
+    from pihole_detector.state import State
+    from conftest import FakeTelegram
+    tg = FakeTelegram()
+    assert cmd_preview(Config(bot_enabled=True, telegram_chat_id="42"), tg=tg, state=State()) == 0
+    first, second = tg.payloads("sendPhoto")
+    assert "Example" in first["caption"] and "Block evil-c2.example" in first["reply_markup"]
+    assert "Example" in second["caption"] and tg.messages == []
 
 
 def test_a_pushed_tunneling_alert_has_a_block_button_for_its_apex(make_detector, tmp_path):

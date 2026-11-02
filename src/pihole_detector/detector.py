@@ -24,7 +24,7 @@ from .rules.randomness import DgaSingle, NxdomainBurst
 from .rules.traffic import Beaconing, Tunneling
 from .delivery import Delivery
 from .alertlog import AlertLog
-from .sinks import build_digest
+from .sinks import build_digest, digest_caption
 from .source import PiholeClient
 from .state import State
 from .telegram import Telegram
@@ -210,13 +210,15 @@ class Detector:
         if not (due or force):
             return False
         records = self.directory.relabel(self.alert_log.read(last or 0, now))
-        text = build_digest(records, dict(self.stats), start=last or now, end=now)
+        stats = dict(self.stats)
+        text = build_digest(records, stats, start=last or now, end=now)
         buttons = None
         if self.cfg.bot_enabled and records:
             days = max(1, round((now - (last or now)) / 86400))
             full = self.delivery.button("📄 Full report", {"kind": "full_report", "days": days, "end": now}, now)
             buttons = [*self.delivery.block_rows(records, now, limit=5), [full]]
-        sent = self.delivery.send(text, buttons)
+        png = self.delivery.render("digest_card", records, stats, last or now, now) if records else None
+        sent = self.delivery.send_card(png, digest_caption(records, stats, last or now, now), text, buttons)
         # The digest doubles as the heartbeat, so leave a trace of it either way.
         log.info("digest %s: %d alert(s)", "sent" if sent else "NOT sent", len(records))
         self.state.put("last_digest_day", today)  # either way: a failed send must not retry every poll

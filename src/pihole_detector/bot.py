@@ -20,9 +20,9 @@ from .domains import apex
 from .names import ipv4_of
 from .report import build_report
 from .delivery import APEX, MAX_MUTE, QUIET, in_quiet, mute_row
-from .sinks import SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, layout, rule_title, severity_line, when
+from .sinks import CAPTION_LIMIT, SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, layout, rule_title, severity_line, when
 from .source import ApiError, PiholeClient
-from .model import HIGH, LOW, MEDIUM, is_private
+from .model import HIGH, LOW, MEDIUM, Alert, is_private
 
 log = logging.getLogger(__name__)
 
@@ -195,32 +195,47 @@ class Bot:
         return self.delivery.send(text, buttons)
 
     # alert buttons --------------------------------------------------------------------------
-    def _settle(self, cb: dict | None, family: tuple[str, ...], key: str, status: str, row: list[dict]) -> None:
+    def _settle(self, cb: dict | None, family: tuple[str, ...], key: str, status: str, row: list[dict],
+                card: bytes | None = None) -> None:
         """Show the result on the message whose button was pressed, with `row` in that button's place. Telegram
         sends no text or keyboard for a message past 48 hours, and an edit can fail: those get a new message."""
         message = (cb or {}).get("message") or {}
         rows = (message.get("reply_markup") or {}).get("inline_keyboard")
-        if cb and message.get("text") and rows:
-            text = set_status(message["text"], family, key, status)
-            if self.telegram.edit(message["message_id"], text, swap_row(rows, cb.get("data") or "", row),
-                                  entities=message.get("entities") or []):
+        words = message.get("text") or message.get("caption")
+        if cb and words and rows:
+            text = set_status(words, family, key, status)
+            keyboard = swap_row(rows, cb.get("data") or "", row)
+            entities = message.get("entities") or message.get("caption_entities") or []
+            if "photo" not in message:
+                done = self.telegram.edit(message["message_id"], text, keyboard, entities=entities)
+            elif card:
+                done = self.telegram.edit_photo(message["message_id"], card, text, entities, keyboard)
+            else:
+                done = self.telegram.edit_caption(message["message_id"], text, entities, keyboard)
+            if done:
                 return
         self.reply(esc(status), buttons=[row])
+
+    def _redraw(self, payload: dict, blocked: bool) -> bytes | None:
+        """The alert's card for this state. Only a pushed alert's buttons carry the alert."""
+        record = payload.get("alert")
+        return self.delivery.render("alert_card", Alert.from_dict(record), blocked) if record else None
 
     def press_block(self, payload: dict, now: float, cb: dict | None = None) -> None:
         domain = payload["domain"]
         if not self._apply(f"Block button {domain}", list_wild("deny", domain), now):
             return
-        undo = self.delivery.button("↩️ Undo block", {"kind": "unblock", "domain": domain}, now)
-        self._settle(cb, BLOCK_STATUS, domain, f"🛡 Blocked {domain} and all its subdomains for everyone.", [undo])
+        undo = self.delivery.button("↩️ Undo block", {**payload, "kind": "unblock"}, now)
+        self._settle(cb, BLOCK_STATUS, domain, f"🛡 Blocked {domain} and all its subdomains for everyone.", [undo],
+                     self._redraw(payload, blocked=True))
 
     def press_unblock(self, payload: dict, now: float, cb: dict | None = None) -> None:
         domain = payload["domain"]
         block = list_wild("deny", domain)
         if not self._apply(f"Undo Block button {domain}", Change(block.undo or [], block.ops), now):
             return
-        again = self.delivery.button(f"🛡 Block {domain}", {"kind": "block", "domain": domain}, now, "danger")
-        self._settle(cb, BLOCK_STATUS, domain, f"↩️ Unblocked {domain}.", [again])
+        again = self.delivery.button(f"🛡 Block {domain}", {**payload, "kind": "block"}, now, "danger")
+        self._settle(cb, BLOCK_STATUS, domain, f"↩️ Unblocked {domain}.", [again], self._redraw(payload, blocked=False))
 
     def press_mute(self, payload: dict, now: float, cb: dict | None = None) -> None:
         hours = payload["hours"]
@@ -498,16 +513,18 @@ class Bot:
             blocking = self.api.get("/dns/blocking")
         except Exception as exc:
             icon, summary, pihole = "🚨", "Pi-hole is not reachable", f"Pi-hole: {esc(type(exc).__name__)}"
+            health = "Not reachable"
         else:
             value = esc(blocking.get("blocking"))
             timer = f", back on in {ago(blocking['timer'])}" if blocking.get("timer") else ""
             pihole = f"Blocking: {value}"
             if value == "enabled":
-                icon, summary = "✅", "Pi-hole is up and blocking"
+                icon, summary, health = "✅", "Pi-hole is up and blocking", "Up and blocking"
             else:
-                icon, summary = "⚠️", f"blocking is {value}{timer}"
+                icon, summary, health = "⚠️", f"blocking is {value}{timer}", f"Blocking {value}"
                 actions.append("/resume turns it back on.")
-        facts = [severity_line({s: stats.get(f"alert_{s}", 0) for s in (HIGH, MEDIUM, LOW)}, zeros=True)]
+        counts = {s: stats.get(f"alert_{s}", 0) for s in (HIGH, MEDIUM, LOW)}
+        facts = [severity_line(counts, zeros=True)]
         if stats.get("api_failures"):
             facts.append(f"⚠️ {stats['api_failures']} failed polls since the last digest")
         mute_until, quiet = self.delivery.mute_until, self.delivery.quiet
@@ -519,13 +536,22 @@ class Bot:
         if mute_until > now:
             actions.append("/unmute ends the hold early.")
         last = self.det.state.get("last_digest")
-        self.reply(layout(icon, f"Status: {summary}", facts, "\n".join(actions), [
+        details = [
             pihole,
             f"Detector up {ago(now - self.started)} · {stats.get('queries', 0):,} lookups checked "
             f"since {esc(when(last)) if last else 'start'}",
             f"Instant alerts {'on' if cfg.push_enabled else 'off'} · next digest {esc(when(self.det.next_digest(now)))}",
             f"Rotation sync {'on' if cfg.rotation_sync else 'off'} · nmap {'on' if cfg.nmap_enabled else 'off'}",
-        ]))
+        ]
+        action = "\n".join(actions)
+        calm = icon == "✅" and not stats.get("api_failures")
+        level = {"✅": "ok" if calm else "warn", "⚠️": "warn", "🚨": "down"}[icon]
+        png = self.delivery.render("status_card", level, "All good" if calm else summary.capitalize(), [
+            ("Pi-hole", health), ("Detector", f"Up {ago(now - self.started)}"),
+            ("Alerts", ", ".join(f"{counts[s]} {s.lower()}" for s in (HIGH, MEDIUM, LOW))),
+            ("Next digest", when(self.det.next_digest(now)))], when(now))
+        self.delivery.send_card(png, layout("", "", facts, action, details, CAPTION_LIMIT),
+                                layout(icon, f"Status: {summary}", facts, action, details))
 
     # /report --------------------------------------------------------------------------------
     def _records(self, days: float, now: float) -> list[dict]:

@@ -8,14 +8,16 @@ PUSH_ENABLED on; a per-device mute drops them, /mute and quiet hours hold them f
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from collections import deque
 
 from .alertlog import upgrade
 from .model import HIGH
-from .sinks import SEVERITY_ICON, esc, fit, format_push, needs_attention, rule_title, when
+from .sinks import SEVERITY_ICON, esc, fit, format_push, needs_attention, push_caption, rule_title, when
 
+log = logging.getLogger(__name__)
 APEX = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")  # a plain domain: safe to put in a Block button
 QUIET = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)-([01]?\d|2[0-3]):([0-5]\d)")
 MAX_HELD = 200
@@ -67,7 +69,8 @@ def alert_buttons(state, alert, now: float) -> list[list[dict]]:
     command = (alert.evidence or {}).get("block")
     target = block_target(alert.evidence)
     if target:
-        rows.append([action_button(state, f"🛡 Block {target}", {"kind": "block", "domain": target}, now, "danger")])
+        block = {"kind": "block", "domain": target, "alert": alert.to_dict()}  # the alert, to redraw its card
+        rows.append([action_button(state, f"🛡 Block {target}", block, now, "danger")])
     rows.append(mute_row(state, alert.rule, alert.device, alert.label, now))
     if command and len(command) <= 256:  # copy_text holds 1-256 characters
         rows.append([{"text": "📋 Copy block command", "copy_text": {"text": command}}])
@@ -85,6 +88,24 @@ class Delivery:
         """A message that is not an alert push: never held, muted or capped."""
         return self.telegram.send(text, buttons=buttons)
 
+    def render(self, card: str, *args) -> bytes | None:
+        """A picture card from drawing.py, or None when pictures are off or it can't be drawn. Imported
+        here because Pillow is the one dependency: without it, messages stay text."""
+        if not self.cfg.image_cards:
+            return None
+        try:
+            from . import drawing
+            return getattr(drawing, card)(*args)
+        except Exception:
+            log.exception("drawing %s failed; sending text", card)
+            return None
+
+    def send_card(self, png: bytes | None, caption: str, text: str, buttons=None) -> bool:
+        """The picture and its caption, or `text` if there is no picture or Telegram refuses it."""
+        if png and self.telegram.send_photo(png, caption, buttons):
+            return True
+        return self.send(text, buttons)
+
     def button(self, label: str, payload: dict, now: float, style: str | None = None) -> dict:
         return action_button(self.state, label, payload, now, style)
 
@@ -96,9 +117,11 @@ class Delivery:
             self._hold(alert)  # sent as one summary when /mute or quiet hours end
             return
         buttons = alert_buttons(self.state, alert, alert.time) if self.cfg.bot_enabled else None
-        self._push(format_push(alert, hint=not buttons), alert.time, buttons)
+        hint = not buttons
+        self._push(alert, hint, buttons)
 
-    def _push(self, text: str, now: float, buttons) -> bool:
+    def _push(self, alert, hint: bool, buttons) -> bool:
+        now = alert.time
         while self._pushed and self._pushed[0] < now - 3600:
             self._pushed.popleft()
         cap = self.cfg.push_cap_per_hour
@@ -111,7 +134,8 @@ class Delivery:
             return False
         self._over_cap = False
         self._pushed.append(now)
-        return self.telegram.send(text, buttons=buttons)
+        return self.send_card(self.render("alert_card", alert), push_caption(alert, hint),
+                              format_push(alert, hint=hint), buttons)
 
     # holding --------------------------------------------------------------------------------
     def hold_reason(self, now: float) -> str | None:

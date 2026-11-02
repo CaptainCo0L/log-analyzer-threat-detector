@@ -87,12 +87,16 @@ Alert settings:
 | `/mute [30m\|1h\|8h\|1d]` · `/unmute` | Hold instant alerts (default 1 h, at most 7 d) |
 | `/quiet 23:00-07:00` · `/quiet off` | Hold instant alerts every day in that window (can cross midnight) |
 | `/push on\|off` | Instant alerts on or off (`PUSH_ENABLED`) |
-| `/settings` · `/set NAME value` · `/unset NAME` | Show or change thresholds: `NXDOMAIN_*`, `TUNNEL_*`, `BEACON_*`, `SILENT_*`, `DEDUP_HOURS`, `DIGEST_HOUR`, `PUSH_CAP_PER_HOUR`, `ROTATION_SYNC`, `ROTATION_KEEP`, `NMAP_ENABLED`, `NMAP_EXCLUDE`, `PUSH_ENABLED` |
+| `/settings` · `/set NAME value` · `/unset NAME` | Show or change thresholds: `NXDOMAIN_*`, `TUNNEL_*`, `BEACON_*`, `SILENT_*`, `DEDUP_HOURS`, `DIGEST_HOUR`, `PUSH_CAP_PER_HOUR`, `ROTATION_SYNC`, `ROTATION_KEEP`, `NMAP_ENABLED`, `NMAP_EXCLUDE`, `PUSH_ENABLED`, `IMAGE_CARDS` |
 
 Held alerts are still logged, and when the mute or quiet window ends they arrive as one message
 with a Block button per domain. Health and rotation messages are never held. `/set` values are
 saved in `state.db` and survive restarts; `/unset` goes back to the `.env` value. Paths, URLs and
 secrets can't be set from chat.
+
+Pushes, a digest with alerts and `/status` are picture cards, drawn with Pillow: Telegram text has no colour
+or font sizes. Each still has its plain text, used when a card can't be drawn or Telegram refuses it. To go back
+to text, send `/set IMAGE_CARDS false`.
 
 Pushed alerts carry buttons:
 - **🛡 Block `<apex>`** (only when the domain resolved) adds a Pi-hole regex deny for the apex and every
@@ -112,7 +116,8 @@ log, because bot chats are not end-to-end encrypted.
 ## Requirements
 
 - Pi-hole v6 (FTL REST API); developed against Pi-hole v6.4 / FTL 6.7.
-- Python 3.12+, **standard library only**. `pytest` for the tests.
+- Python 3.12+. Pillow draws the picture cards ([ADR 0004](docs/adr/0004-picture-cards-in-telegram.md));
+  everything else is the standard library. `pytest` for the tests.
 
 ## Quick start (no Pi-hole needed)
 

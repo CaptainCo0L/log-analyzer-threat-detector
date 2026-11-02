@@ -116,3 +116,8 @@ class Alert:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, record: dict) -> "Alert":
+        """The inverse of to_dict, after a trip through JSON."""
+        return cls(**{**record, "ips": tuple(record.get("ips") or ())})
