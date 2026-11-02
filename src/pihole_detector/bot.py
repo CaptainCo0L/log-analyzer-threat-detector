@@ -14,7 +14,7 @@ import threading
 import time
 from collections import Counter
 
-from .changes import Change, add_client, delete_client, list_exact, list_wild, set_blocking, update_client
+from .changes import Change, list_exact, list_wild, rename, set_blocking, set_group
 from .domains import apex
 from .names import ipv4_of
 from .report import build_report
@@ -337,19 +337,9 @@ class Bot:
             self.reply(problem)
             return
         new_name = " ".join(args[1:])[:100]
-        entries = {c.mac: c for c in self.api.clients()}
-        ops, undo = [], []
-        for dev in targets:
-            entry = entries.get(dev.hwaddr)
-            if entry:
-                ops.append(update_client(entry.client, new_name, entry.groups))
-                undo.append(update_client(entry.client, entry.comment, entry.groups))
-            else:
-                ops.append(add_client(dev.hwaddr, new_name, [0]))
-                undo.append(delete_client(dev.hwaddr))
+        change = rename([d.hwaddr for d in targets], self.api.clients(), new_name)
         macs = ", ".join(f"<code>{d.hwaddr}</code>" for d in targets)
-        self._change(f"/name {' '.join(args)}", Change(ops, undo),
-                     f"🏷 Named {macs} <b>{esc(new_name)}</b> in Pi-hole Clients.", now)
+        self._change(f"/name {' '.join(args)}", change, f"🏷 Named {macs} <b>{esc(new_name)}</b> in Pi-hole Clients.", now)
 
     def cmd_group(self, args, now) -> None:
         remove = len(args) >= 3 and args[-1].lower() == "remove"
@@ -370,31 +360,20 @@ class Bot:
         if problem:
             self.reply(problem)
             return
-        entries = {c.mac: c for c in self.api.clients()}
-        ops, undo = [], []
-        for dev in targets:
-            entry = entries.get(dev.hwaddr)
-            have = set(entry.groups) if entry else {0}
-            want = sorted(have - {gid} if remove else have | {0, gid})
-            if entry:
-                ops.append(update_client(entry.client, entry.comment, want))
-                undo.append(update_client(entry.client, entry.comment, entry.groups))
-            elif not remove:
-                ops.append(add_client(dev.hwaddr, self._name(dev), want))
-                undo.append(delete_client(dev.hwaddr))
+        change = set_group({d.hwaddr: self._name(d) for d in targets}, self.api.clients(), gid, remove)
         label, name = esc(self._name(targets[0])), esc(groups[gid])
-        if not ops:
+        if not change.ops:
             self.reply(f"{label} isn't in {name}.")
             return
         command = f"/group {' '.join(args)}"
         if remove:
             confirm = self.delivery.button(f"✅ Remove from {groups[gid]}", {
-                "kind": "ops", "ops": ops, "undo": undo, "command": command,
+                "kind": "ops", "ops": change.ops, "undo": change.undo, "command": command,
                 "text": f"👥 Removed {label} from <b>{name}</b>."}, now, style="danger")
             self.reply(f"Remove {label} from <b>{name}</b>? That changes which lists block things for it.",
                        buttons=[[confirm]])
             return
-        self._change(command, Change(ops, undo), f"👥 Added {label} to <b>{name}</b> (and kept Default).", now)
+        self._change(command, change, f"👥 Added {label} to <b>{name}</b> (and kept Default).", now)
 
     # alert settings -------------------------------------------------------------------------
     def cmd_mute(self, args, now) -> None:

@@ -20,7 +20,7 @@ from pathlib import Path
 from . import yearlog
 from .domains import apex
 from .names import same_name
-from .rotation import Client, SyncPlan
+from .rotation import DEFAULT_GROUP, Client, SyncPlan
 from .sinks import when
 from .source import NotFound, PiholeClient
 
@@ -72,6 +72,39 @@ def list_wild(list_type: str, apex: str) -> Change:
     """Put an apex and all its subdomains on the "deny" or "allow" list."""
     regex = wild_regex(apex)
     return Change([add_domain(list_type, "regex", regex)], [delete_domain(list_type, "regex", regex)])
+
+
+def rename(macs: list[str], clients: list[Client], name: str) -> Change:
+    """Give these MACs a comment, creating an entry in Default for any that has none."""
+    entries = {c.mac: c for c in clients}
+    ops, undo = [], []
+    for mac in macs:
+        entry = entries.get(mac)
+        if entry:
+            ops.append(update_client(entry.client, name, entry.groups))
+            undo.append(update_client(entry.client, entry.comment, entry.groups))
+        else:
+            ops.append(add_client(mac, name, [DEFAULT_GROUP]))
+            undo.append(delete_client(mac))
+    return Change(ops, undo)
+
+
+def set_group(labels: dict[str, str], clients: list[Client], group: int, remove: bool) -> Change:
+    """Add these MACs to a group, keeping Default, or take them out of it. `labels` (MAC -> label) names
+    the entry a MAC without one gets; removing has nothing to do for such a MAC."""
+    entries = {c.mac: c for c in clients}
+    ops, undo = [], []
+    for mac, label in labels.items():
+        entry = entries.get(mac)
+        have = set(entry.groups) if entry else {DEFAULT_GROUP}
+        want = sorted(have - {group} if remove else have | {DEFAULT_GROUP, group})
+        if entry:
+            ops.append(update_client(entry.client, entry.comment, want))
+            undo.append(update_client(entry.client, entry.comment, entry.groups))
+        elif not remove:
+            ops.append(add_client(mac, label, want))
+            undo.append(delete_client(mac))
+    return Change(ops, undo)
 
 
 class PiholeChanges:
