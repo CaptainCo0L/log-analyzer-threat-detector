@@ -15,7 +15,7 @@ from .intel import DomainSet, GravityIntel
 from .directory import Directory
 from .names import best_probe, ipv4_of, is_ipv4
 from .namestore import NameStore
-from .model import HIGH, Alert, Device, Query
+from .model import HIGH, Alert, Device, Query, is_private
 from .rotation_handler import RotationHandler
 from .rules import Context, Seen
 from .rules.devices import IotOffBaseline, new_devices, silent_devices
@@ -105,7 +105,7 @@ class Detector:
         Nothing knows a just-seen MAC's name yet, so ask the device itself; it has just joined, so it is
         awake. The name is saved either way, so its later alerts carry it.
         """
-        ip = ipv4_of(dev) if dev.is_private_mac else None
+        ip = ipv4_of(dev) if is_private(dev.hwaddr) else None
         if not ip:
             return None
         try:

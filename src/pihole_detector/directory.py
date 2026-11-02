@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import ipaddress
 
+from .model import MAC
 from .names import comment_for, ipv4_of, name_key
-from .namestore import MAC, NameStore, relabel
+from .namestore import NameStore, relabel
 from .rotation import TRUSTED, device_macs
 
 

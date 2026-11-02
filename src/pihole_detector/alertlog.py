@@ -12,8 +12,7 @@ import json
 from pathlib import Path
 
 from . import yearlog
-from .model import Alert
-from .namestore import MAC
+from .model import MAC, Alert
 
 
 def upgrade(record: dict) -> dict:

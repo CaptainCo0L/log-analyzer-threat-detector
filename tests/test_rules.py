@@ -279,6 +279,13 @@ def test_new_device_quiet_on_first_snapshot_then_alerts(make_detector):
     assert det.process_devices([new], T0 + 200) == []
 
 
+def test_a_placeholder_as_long_as_a_mac_is_still_a_placeholder(make_detector):
+    # FTL's "ip-<addr>" is 17 characters for addresses like 192.168.18.134, the length of a MAC
+    det = make_detector()
+    placeholder = Device(hwaddr="ip-192.168.18.134", ips=("192.168.18.134",), first_seen=T0)
+    assert det.process_devices([placeholder], T0 + 100) == []
+
+
 IPAD_OLD, IPAD_NEW = "02:00:00:00:00:30", "06:00:00:00:00:31"
 
 

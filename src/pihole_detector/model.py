@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 
 HIGH, MEDIUM, LOW = "HIGH", "MEDIUM", "LOW"
+MAC = re.compile(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", re.I)
+
+
+def is_private(mac: str) -> bool:
+    """Locally administered bit: the per-network / rotating Wi-Fi addresses phones and tablets use."""
+    return bool(MAC.fullmatch(mac)) and int(mac[:2], 16) & 2 == 2
 
 
 @dataclass(frozen=True)
@@ -71,12 +78,7 @@ class Device:
     @property
     def is_real_mac(self) -> bool:
         # FTL uses "ip-<addr>" placeholders when it cannot see a MAC (e.g. bridge networking).
-        return len(self.hwaddr) == 17 and self.hwaddr != "00:00:00:00:00:00"
-
-    @property
-    def is_private_mac(self) -> bool:
-        # Locally administered bit: the per-network / rotating Wi-Fi addresses phones and tablets use.
-        return self.is_real_mac and int(self.hwaddr[:2], 16) & 2 == 2
+        return bool(MAC.fullmatch(self.hwaddr)) and self.hwaddr != "00:00:00:00:00:00"
 
 
 def join_address(ips, mac: str | None) -> str:

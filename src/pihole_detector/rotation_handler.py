@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import logging
 
-from .rotation import format_sync, is_private, plan_sync
+from .model import is_private
+from .rotation import format_sync, plan_sync
 
 log = logging.getLogger(__name__)
 

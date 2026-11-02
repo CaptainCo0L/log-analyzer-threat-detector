@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from ..baseline import NEW
-from ..model import HIGH, LOW, MEDIUM, Alert, Device, Query
-from ..namestore import MAC
+from ..model import HIGH, LOW, MEDIUM, MAC, Alert, Device, Query
 from . import BLOCKED_STATUSES, Context, QueryRule, Seen, block_hint, make_alert
 
 

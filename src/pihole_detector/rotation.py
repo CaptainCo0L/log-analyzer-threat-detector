@@ -10,6 +10,7 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass, field
 
+from .model import is_private
 from .names import same_name
 
 TRUSTED = ("mDNS", "Bonjour")
@@ -32,10 +33,6 @@ class SyncPlan:
     add: Client | None = None
     delete: list[Client] = field(default_factory=list)
     reason: str | None = None  # why nothing is done
-
-
-def is_private(mac: str) -> bool:
-    return len(mac) == 17 and int(mac[:2], 16) & 2 == 2
 
 
 def device_macs(names: dict[str, dict], name: str, exclude: str = "") -> set[str]:

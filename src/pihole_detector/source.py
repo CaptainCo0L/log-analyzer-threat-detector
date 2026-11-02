@@ -10,8 +10,7 @@ import urllib.request
 from pathlib import Path
 from typing import Protocol
 
-from .model import Device, Query
-from .namestore import MAC
+from .model import MAC, Device, Query
 from .rotation import Client
 
 log = logging.getLogger(__name__)

@@ -18,11 +18,10 @@ from .changes import Change, list_exact, list_wild, rename, set_blocking, set_gr
 from .domains import apex
 from .names import ipv4_of
 from .report import build_report
-from .rotation import is_private
 from .delivery import APEX, MAX_MUTE, QUIET, in_quiet
 from .sinks import RULES, SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, when
 from .source import ApiError, PiholeClient
-from .model import HIGH, LOW, MEDIUM
+from .model import HIGH, LOW, MEDIUM, is_private
 
 log = logging.getLogger(__name__)
 

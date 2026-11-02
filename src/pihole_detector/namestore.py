@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -65,9 +64,6 @@ class NameStore:
         tmp.write_text(json.dumps(self.entries, indent=2, sort_keys=True), encoding="utf-8")
         os.replace(tmp, self.path)  # a reader never sees a half-written file
         self._stamp = self._file_stamp()
-
-
-MAC = re.compile(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", re.I)
 
 
 def relabel(records: list[dict], lookup) -> list[dict]:
