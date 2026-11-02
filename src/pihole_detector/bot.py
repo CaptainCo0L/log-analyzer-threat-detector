@@ -14,7 +14,8 @@ import threading
 import time
 from collections import Counter
 
-from .changes import add_client, add_domain, delete_client, delete_domain, set_blocking, update_client
+from .changes import (Change, add_client, add_domain, delete_client, delete_domain, list_exact, list_wild,
+                      set_blocking, update_client, wild_regex)
 from .domains import apex
 from .names import ipv4_of
 from .report import build_report
@@ -55,11 +56,6 @@ MAX_PAUSE_MINUTES = 60
 STALE_SECONDS = 300
 ONLINE_SECONDS = 900
 MAX_REPORT_DAYS = 30
-
-
-def wild_regex(domain: str) -> str:
-    """Pi-hole's regex for a domain and all its subdomains, as `pihole --wild` writes it."""
-    return r"(\.|^)" + domain.replace(".", r"\.") + "$"
 
 
 def _display_setting(value):
@@ -185,24 +181,11 @@ class Bot:
     # alert buttons --------------------------------------------------------------------------
     def press_block(self, payload: dict, now: float) -> str:
         domain = payload["domain"]
-        try:
-            self.api.add_domain("deny", "regex", wild_regex(domain), comment=f"Telegram, {when(now)}")
-        except Exception as exc:
-            self.reply(f"⚠️ Couldn't block <code>{esc(domain)}</code>: {esc(exc)}")
-            return f"Couldn't block: {exc}"[:200]
-        undo = self.delivery.button("↩️ Undo", {"kind": "unblock", "domain": domain}, now)
-        self.reply(f"🛡 Blocked <code>{esc(domain)}</code> and all its subdomains for everyone.", buttons=[[undo]])
-        return "Blocked"
-
-    def press_unblock(self, payload: dict, now: float) -> str:
-        domain = payload["domain"]
-        try:
-            self.api.delete_domain("deny", "regex", wild_regex(domain))
-        except Exception as exc:
-            self.reply(f"⚠️ Couldn't unblock <code>{esc(domain)}</code>: {esc(exc)}")
-            return f"Couldn't unblock: {exc}"[:200]
-        self.reply(f"↩️ Unblocked <code>{esc(domain)}</code>.")
-        return "Unblocked"
+        shown = f"<code>{esc(domain)}</code>"
+        ok = self._change(f"Block button {domain}", list_wild("deny", domain),
+                          f"🛡 Blocked {shown} and all its subdomains for everyone.", now,
+                          undo_text=f"↩️ Unblocked {shown}.")
+        return "Blocked" if ok else "Failed"
 
     def press_mute(self, payload: dict, now: float) -> str:
         hours = payload["hours"]
@@ -237,21 +220,25 @@ class Bot:
         return "Undone"
 
     # changes, as undoable lists of ops (see changes.py) ---------------------------------------
-    def _change(self, command: str, ops: list, undo: list | None, text: str, now: float,
-                undo_label: str = "↩️ Undo") -> bool:
+    def _change(self, command: str, change: Change, text: str, now: float, undo_label: str = "↩️ Undo",
+                undo_text: str = "↩️ Undone.") -> bool:
         try:
-            self.changes.apply(ops, now, command)
+            self.changes.apply(change.ops, now, command)
         except Exception as exc:
             self.reply(f"⚠️ Pi-hole refused that: {esc(exc)}")
             return False
-        buttons = [[self.delivery.button(undo_label, {"kind": "ops", "ops": undo, "command": "undo",
-                                             "text": "↩️ Undone."}, now)]] if undo else None
-        self.reply(text, buttons=buttons)
+        self.reply(text, buttons=self._undo_button(change.undo, now, undo_label, undo_text))
         return True
+
+    def _undo_button(self, undo: list | None, now: float, label: str = "↩️ Undo",
+                     text: str = "↩️ Undone.") -> list | None:
+        if not undo:
+            return None
+        return [[self.delivery.button(label, {"kind": "ops", "ops": undo, "command": "undo", "text": text}, now)]]
 
     def press_ops(self, payload: dict, now: float) -> str:
         """An Undo, or a confirmed change: run the stored ops."""
-        ok = self._change(payload["command"], payload["ops"], payload.get("undo"), payload["text"], now)
+        ok = self._change(payload["command"], Change(payload["ops"], payload.get("undo")), payload["text"], now)
         return "Done" if ok else "Failed"
 
     def _domain_arg(self, args, usage: str) -> tuple[str | None, str | None]:
@@ -270,12 +257,11 @@ class Bot:
         if not domain:
             return
         if mode == "exact":
-            op, what = ["deny", "exact", domain], f"<code>{esc(domain)}</code> (that exact name)"
+            change, what = list_exact("deny", domain), f"<code>{esc(domain)}</code> (that exact name)"
         else:
             target = apex(domain)
-            op, what = ["deny", "regex", wild_regex(target)], f"<code>{esc(target)}</code> and all its subdomains"
-        self._change(f"/block {' '.join(args)}", [add_domain(*op)], [delete_domain(*op)],
-                     f"🛡 Blocked {what} for everyone.", now)
+            change, what = list_wild("deny", target), f"<code>{esc(target)}</code> and all its subdomains"
+        self._change(f"/block {' '.join(args)}", change, f"🛡 Blocked {what} for everyone.", now)
 
     def cmd_allow(self, args, now) -> None:
         mode, domain = self._domain_arg(args, "/allow <domain>  or  /allow wild <domain>")
@@ -283,11 +269,10 @@ class Bot:
             return
         if mode == "wild":
             target = apex(domain)
-            op, what = ["allow", "regex", wild_regex(target)], f"<code>{esc(target)}</code> and all its subdomains"
+            change, what = list_wild("allow", target), f"<code>{esc(target)}</code> and all its subdomains"
         else:
-            op, what = ["allow", "exact", domain], f"<code>{esc(domain)}</code> (that exact name)"
-        self._change(f"/allow {' '.join(args)}", [add_domain(*op)], [delete_domain(*op)],
-                     f"✅ Allowed {what} for everyone.", now)
+            change, what = list_exact("allow", domain), f"<code>{esc(domain)}</code> (that exact name)"
+        self._change(f"/allow {' '.join(args)}", change, f"✅ Allowed {what} for everyone.", now)
 
     def _remove_listed(self, list_type: str, args, now) -> None:
         """Remove every entry the bot could have added for this domain (exact and wildcard)."""
@@ -305,9 +290,9 @@ class Bot:
         if not removed:
             self.reply(f"<code>{esc(domain)}</code> wasn't on Pi-hole's {listed} list, as an exact name or with subdomains.")
             return
-        undo = self.delivery.button("↩️ Undo", {"kind": "ops", "ops": removed, "command": "undo", "text": "↩️ Undone."}, now)
         verb = "Unblocked" if list_type == "deny" else "Removed the allow for"
-        self.reply(f"{'🔓' if list_type == 'deny' else '🚫'} {verb} <code>{esc(domain)}</code>.", buttons=[[undo]])
+        self.reply(f"{'🔓' if list_type == 'deny' else '🚫'} {verb} <code>{esc(domain)}</code>.",
+                   buttons=self._undo_button(removed, now))
 
     def cmd_unblock(self, args, now) -> None:
         self._remove_listed("deny", args, now)
@@ -324,12 +309,12 @@ class Bot:
         capped = minutes > MAX_PAUSE_MINUTES
         minutes = min(minutes, MAX_PAUSE_MINUTES)
         note = f" ({MAX_PAUSE_MINUTES} min is the most I'll pause)" if capped else ""
-        self._change(f"/pause {minutes}", [set_blocking(False, minutes * 60)], [set_blocking(True)],
+        self._change(f"/pause {minutes}", Change([set_blocking(False, minutes * 60)], [set_blocking(True)]),
                      f"⏸ Blocking paused for {minutes} min{note}. Pi-hole turns it back on by itself, "
                      f"at {esc(when(now + minutes * 60))}.", now, undo_label="▶️ Resume now")
 
     def cmd_resume(self, args, now) -> None:
-        self._change("/resume", [set_blocking(True)], None, "▶️ Blocking is on again.", now)
+        self._change("/resume", Change([set_blocking(True)]), "▶️ Blocking is on again.", now)
 
     def _targets(self, query: str) -> tuple[list, str | None]:
         """The device(s) a /name or /group means: one device, or one device on several MACs."""
@@ -364,7 +349,8 @@ class Bot:
                 ops.append(add_client(dev.hwaddr, new_name, [0]))
                 undo.append(delete_client(dev.hwaddr))
         macs = ", ".join(f"<code>{d.hwaddr}</code>" for d in targets)
-        self._change(f"/name {' '.join(args)}", ops, undo, f"🏷 Named {macs} <b>{esc(new_name)}</b> in Pi-hole Clients.", now)
+        self._change(f"/name {' '.join(args)}", Change(ops, undo),
+                     f"🏷 Named {macs} <b>{esc(new_name)}</b> in Pi-hole Clients.", now)
 
     def cmd_group(self, args, now) -> None:
         remove = len(args) >= 3 and args[-1].lower() == "remove"
@@ -409,7 +395,7 @@ class Bot:
             self.reply(f"Remove {label} from <b>{name}</b>? That changes which lists block things for it.",
                        buttons=[[confirm]])
             return
-        self._change(command, ops, undo, f"👥 Added {label} to <b>{name}</b> (and kept Default).", now)
+        self._change(command, Change(ops, undo), f"👥 Added {label} to <b>{name}</b> (and kept Default).", now)
 
     # alert settings -------------------------------------------------------------------------
     def cmd_mute(self, args, now) -> None:

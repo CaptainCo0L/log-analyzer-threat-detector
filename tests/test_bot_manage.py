@@ -177,6 +177,16 @@ def test_every_change_and_undo_is_logged(make_detector, tmp_path):
     assert lines[0]["ops"] == [["add_domain", "deny", "regex", TRACKER]]
 
 
+def test_the_block_button_and_its_undo_are_logged_like_the_commands(make_detector, tmp_path):
+    bot, det, api = setup(make_detector, tmp_path)
+    bot.handle(press(f"a:{det.state.add_action({'kind': 'block', 'domain': 'tracker.example'}, T0)}"), T0)
+    undo_last(bot, det)
+    lines = [json.loads(line) for line in (tmp_path / "pihole_changes.jsonl").read_text().splitlines()]
+    assert [line["ops"] for line in lines] == [[["add_domain", "deny", "regex", TRACKER]],
+                                               [["delete_domain", "deny", "regex", TRACKER]]]
+    assert lines[0]["command"] == "Block button tracker.example"
+
+
 def test_new_commands_are_in_the_menu():
     from pihole_detector.bot import BOT_COMMANDS
     assert {"block", "allow", "unblock", "unallow", "pause", "resume", "name", "group"} <= {c for c, _ in BOT_COMMANDS}

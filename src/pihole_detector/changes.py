@@ -14,7 +14,7 @@ Two kinds, each with its own log:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import yearlog
@@ -47,6 +47,30 @@ def update_client(client: str, comment: str, groups) -> list:
 
 def delete_client(client: str) -> list:
     return ["delete_client", client]
+
+
+@dataclass(frozen=True)
+class Change:
+    """Ops to run, and the ops that reverse them (None when there is nothing to reverse)."""
+
+    ops: list
+    undo: list | None = None
+
+
+def wild_regex(domain: str) -> str:
+    """Pi-hole's regex for a domain and all its subdomains, as `pihole --wild` writes it."""
+    return r"(\.|^)" + domain.replace(".", r"\.") + "$"
+
+
+def list_exact(list_type: str, domain: str) -> Change:
+    """Put one exact name on the "deny" or "allow" list."""
+    return Change([add_domain(list_type, "exact", domain)], [delete_domain(list_type, "exact", domain)])
+
+
+def list_wild(list_type: str, apex: str) -> Change:
+    """Put an apex and all its subdomains on the "deny" or "allow" list."""
+    regex = wild_regex(apex)
+    return Change([add_domain(list_type, "regex", regex)], [delete_domain(list_type, "regex", regex)])
 
 
 class PiholeChanges:
