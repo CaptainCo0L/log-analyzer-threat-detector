@@ -181,7 +181,13 @@ most recently seen MACs and deletes the older entries.
 
 It never deletes a burned-in MAC, never acts on SSDP/NetBIOS/nmap names, and never touches an
 entry that is not saved under that name. If the device's entries disagree on groups, it does nothing.
-Each change goes to Telegram and to `data/client_changes.jsonl`. To reverse the latest one:
+Each change goes to Telegram and to `data/client_changes.jsonl`.
+
+With `ROTATION_SYNC` on or off, the same match also keeps the detector's own knowledge together: the
+new MAC counts as the same device, so its baseline, mutes and dedup carry on instead of starting over
+([ADR 0003](docs/adr/0003-a-device-is-an-alias-over-its-macs.md)).
+
+To reverse the latest sync, which also separates the MACs again:
 
 ```bash
 sudo docker exec pihole-detector python -m pihole_detector clients-undo

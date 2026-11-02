@@ -108,6 +108,9 @@ familiar is this client → apex relationship?
 `beaconing` and `iot_off_baseline` need NEW, so a device's first week is unmonitored by them
 (`new_device` covers a device that joins later). `dga_single` fires on LEARNING or NEW.
 
+A rotated device keeps its baseline: a trusted rotation links the new MAC to the device, so its
+learning period, mutes, dedup and windows carry on (ADR 0003).
+
 Replaying the real 10-17 → 10-21 queries (103,965) gave 46 alerts before and 11 after. The
 four HIGH alerts of the 10-19 live attack test, and the four dga_single names worth a look,
 still fire.

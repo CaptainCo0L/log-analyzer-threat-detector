@@ -26,6 +26,10 @@ belong in the tests' update instead.
 Naming a device, matching two names (`names.same_name`) and finding a device from what the owner typed
 all go through `directory.Directory` and `names`. A new feature that needs a device's name asks there.
 
+Per-device state is keyed on the device's identity (`state.device_of`, `Seen.ident`), never a raw MAC, so it
+survives a rotation (ADR 0003). The exception is anything Pi-hole lists by MAC, such as its groups:
+that compares the MAC in use (`Seen.origin`).
+
 ## Pi-hole changes are ops
 
 Code that changes Pi-hole builds ops with the builders in `changes.py` and runs them with
