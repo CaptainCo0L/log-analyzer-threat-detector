@@ -39,12 +39,11 @@ class AlertLog:
     def write(self, alert: Alert) -> None:
         yearlog.append(self.path, alert.to_dict(), sort_keys=True)
 
-    def read(self, start: float = 0, end: float = float("inf"), mac: str | None = None) -> list[dict]:
-        """Alerts with start <= time <= end, oldest first; only one device's when `mac` is given."""
-        return self.read_counted(start, end, mac)[0]
+    def read(self, start: float = 0, end: float = float("inf")) -> list[dict]:
+        """Alerts with start <= time <= end, oldest first."""
+        return self.read_counted(start, end)[0]
 
-    def read_counted(self, start: float = 0, end: float = float("inf"),
-                     mac: str | None = None) -> tuple[list[dict], int]:
+    def read_counted(self, start: float = 0, end: float = float("inf")) -> tuple[list[dict], int]:
         """read(), plus how many lines could not be read."""
         records, skipped = [], 0
         for path in yearlog.files(self.path, start):
@@ -59,6 +58,6 @@ class AlertLog:
                     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                         skipped += 1
                         continue
-                    if start <= when <= end and (mac is None or record["mac"] == mac):
+                    if start <= when <= end:
                         records.append(record)
         return records, skipped

@@ -232,6 +232,19 @@ def test_whois_shows_top_domains_for_that_device_only_and_recent_alerts(make_det
     assert text.count("ti_match") == 5  # the last five alerts only
 
 
+def test_whois_shows_a_devices_alerts_from_every_mac_it_used(make_detector):
+    from dataclasses import replace
+    bot, det, _ = make_bot(make_detector)
+    left = "06:00:00:00:00:77"
+    det.alert_log.write(replace(alert(T0 - 90, domain="before.example"), device=left, mac=left))
+    det.alert_log.write(alert(T0 - 60, domain="after.example"))
+    det.alert_log.write(replace(alert(T0 - 30, domain="theirs.example"), device=IOT_MAC, mac=IOT_MAC))
+    det.state.link_device(left, PC_MAC)
+    bot.handle(message(f"/whois {PC_IP}"), T0)
+    text = replies(det)[0]
+    assert "before.example" in text and "after.example" in text and "theirs.example" not in text
+
+
 def test_whois_with_no_match_or_several_matches_says_so(make_detector):
     bot, det, _ = make_bot(make_detector)
     bot.handle(message("/whois toaster"), T0)

@@ -617,7 +617,8 @@ class Bot:
                 lines += [f"{i}. <code>{esc(d)}</code> - {n:,}" for i, (d, n) in enumerate(top, 1)] or ["none"]
             except Exception:
                 log.exception("telegram: reading queries for %s failed", ip)
-        recent = self.det.alert_log.read(now - 30 * 86400, now, mac=mac)
+        device_of, device = self.det.state.device_of, self.det.state.device_of(mac)
+        recent = [r for r in self.det.alert_log.read(now - 30 * 86400, now) if device_of(r["device"]) == device]
         recent.sort(key=lambda r: -r.get("time", 0))
         lines += ["", "<b>Recent alerts</b>"]
         lines += [f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r['rule'])}"
