@@ -19,7 +19,7 @@ from .domains import apex
 from .names import ipv4_of
 from .report import build_report
 from .delivery import APEX, MAX_MUTE, QUIET, in_quiet
-from .sinks import RULES, SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, when
+from .sinks import SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, rule_title, severity_line, when
 from .source import ApiError, PiholeClient
 from .model import HIGH, LOW, MEDIUM, is_private
 
@@ -191,7 +191,7 @@ class Bot:
     def press_mute(self, payload: dict, now: float) -> str:
         hours = payload["hours"]
         self.delivery.mute(payload["rule"], payload["ident"], now + hours * 3600)
-        title = RULES.get(payload["rule"], (payload["rule"], ""))[0]
+        title = rule_title(payload["rule"])
         span = f"{hours // 24} d" if hours >= 48 else f"{hours} h"
         undo = self.delivery.button("↩️ Undo", {**payload, "kind": "unmute"}, now)
         self.reply(f"🔕 Muted <b>{esc(title)}</b> for {esc(payload['label'])} for {span}, until "
@@ -201,7 +201,7 @@ class Bot:
 
     def press_unmute(self, payload: dict, now: float) -> str:
         self.delivery.mute(payload["rule"], payload["ident"], 0)
-        title = RULES.get(payload["rule"], (payload["rule"], ""))[0]
+        title = rule_title(payload["rule"])
         self.reply(f"🔔 Unmuted <b>{esc(title)}</b> for {esc(payload['label'])}.")
         return "Unmuted"
 
@@ -464,18 +464,15 @@ class Bot:
             pihole = f"✅ Pi-hole up, blocking {esc(blocking.get('blocking'))}{timer}"
         except Exception as exc:
             pihole = f"🚨 Pi-hole not reachable ({esc(type(exc).__name__)})"
-        alerts = "   ".join(f"{SEVERITY_ICON[s]} {stats.get(f'alert_{s}', 0)} {s.lower()}" for s in (HIGH, MEDIUM, LOW))
+        alerts = severity_line({s: stats.get(f"alert_{s}", 0) for s in (HIGH, MEDIUM, LOW)}, zeros=True)
         last = self.det.state.get("last_digest")
-        local = time.localtime(now)
-        next_report = time.mktime((local.tm_year, local.tm_mon, local.tm_mday + (local.tm_hour >= cfg.digest_hour),
-                                   cfg.digest_hour, 0, 0, 0, 0, -1))
         lines = [
             "📟 <b>Status</b>", "",
             pihole,
             f"🛰 Detector up {ago(now - self.started)} · {stats.get('queries', 0):,} lookups checked "
             f"since {esc(when(last)) if last else 'start'}",
             alerts,
-            f"🔔 Instant alerts {'on' if cfg.push_enabled else 'off'} · next report {esc(when(next_report))}",
+            f"🔔 Instant alerts {'on' if cfg.push_enabled else 'off'} · next report {esc(when(self.det.next_digest(now)))}",
             f"🔁 Rotation sync {'on' if cfg.rotation_sync else 'off'} · nmap {'on' if cfg.nmap_enabled else 'off'}",
         ]
         if stats.get("api_failures"):
@@ -505,10 +502,10 @@ class Bot:
         if not records:
             lines.append("✨ No alerts.")
         else:
-            lines.append("   ".join(f"{SEVERITY_ICON[s]} {by_sev[s]} {s.lower()}" for s in (HIGH, MEDIUM, LOW)))
+            lines.append(severity_line(by_sev, zeros=True))
             by_rule = Counter(r["rule"] for r in records)
             repeats = Counter((r.get("label", "?"), r["rule"], r.get("domain") or "") for r in records)
-            detail = [f"<b>{esc(RULES.get(rule, (rule, ''))[0])}</b>: {count}" for rule, count in by_rule.most_common()]
+            detail = [f"<b>{esc(rule_title(rule))}</b>: {count}" for rule, count in by_rule.most_common()]
             detail += ["", "<b>Most repeated</b>"]
             detail += [f"{n}× {esc(who)} · {esc(rule)}" + (f" · <code>{esc(dom)}</code>" if dom else "")
                        for (who, rule, dom), n in repeats.most_common(10)]

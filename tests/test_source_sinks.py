@@ -338,3 +338,19 @@ def test_callback_answers_and_edits_are_sent():
     tg.edit(9, "new text")
     assert calls[0][:2] == ("answerCallbackQuery", {"callback_query_id": "cb1", "text": "Done"})
     assert calls[1][0] == "editMessageText" and calls[1][1]["message_id"] == 9 and calls[1][1]["chat_id"] == "42"
+
+
+def test_a_severity_line_leaves_out_what_did_not_happen():
+    from pihole_detector.sinks import severity_line
+    assert severity_line({"HIGH": 2, "LOW": 1}) == "🔴 2 high   🟡 1 low"
+
+
+def test_a_severity_line_can_show_zeros_for_a_status():
+    from pihole_detector.sinks import severity_line
+    assert severity_line({"HIGH": 2}, zeros=True) == "🔴 2 high   🟠 0 medium   🟡 0 low"
+
+
+def test_a_rule_with_no_title_goes_by_its_name():
+    from pihole_detector.sinks import rule_title
+    assert rule_title("ti_match") != "ti_match"
+    assert rule_title("brand_new_rule") == "brand_new_rule"

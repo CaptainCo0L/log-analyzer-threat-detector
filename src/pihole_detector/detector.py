@@ -190,6 +190,12 @@ class Detector:
             self.delivery.route(alert)
         return out
 
+    def next_digest(self, now: float) -> float:
+        hour = self.cfg.digest_hour
+        local = time.localtime(now)
+        return time.mktime((local.tm_year, local.tm_mon, local.tm_mday + (local.tm_hour >= hour),
+                            hour, 0, 0, 0, 0, -1))
+
     def maybe_digest(self, now: float, force: bool = False) -> bool:
         last = self.state.get("last_digest")
         local = time.localtime(now)

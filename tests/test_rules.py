@@ -427,3 +427,14 @@ def test_label_uses_pihole_client_comment(make_detector):
     assert a.label == "AswinPC" and a.address == f"{PC_IP} · {PC_MAC}"
     unnamed = det.process_query(q("evil-c2.example", ip="192.0.2.77"))[0]
     assert unnamed.label == "192.0.2.77"
+
+
+def test_the_next_digest_is_today_before_digest_hour_and_tomorrow_after(make_detector, monkeypatch):
+    import calendar
+    import time as _time
+    monkeypatch.setattr(_time, "localtime", _time.gmtime)
+    monkeypatch.setattr(_time, "mktime", calendar.timegm)
+    det = make_detector(digest_hour=9)
+    midnight = 1_760_400_000.0
+    assert det.next_digest(midnight + 8 * 3600) == midnight + 9 * 3600
+    assert det.next_digest(midnight + 9 * 3600) == midnight + 33 * 3600

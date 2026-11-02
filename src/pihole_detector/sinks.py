@@ -35,6 +35,16 @@ RULES = {
 }
 
 
+def rule_title(rule: str) -> str:
+    return RULES.get(rule, (rule, ""))[0]
+
+
+def severity_line(counts, zeros: bool = False) -> str:
+    """"🔴 2 high   🟡 1 low" from {severity: count}. A summary leaves out zeros; a status shows them."""
+    return "   ".join(f"{SEVERITY_ICON[s]} {counts.get(s, 0)} {s.lower()}"
+                      for s in (HIGH, MEDIUM, LOW) if zeros or counts.get(s))
+
+
 def esc(value) -> str:
     return html.escape(str(value), quote=False)
 
@@ -121,14 +131,13 @@ def build_digest(records: list[dict], stats: dict, start: float | None = None, e
     if not records:
         lines.append("✨ Nothing suspicious.")
     else:
-        lines.append("   ".join(f"{SEVERITY_ICON[s]} {by_sev[s]} {s.lower()}" for s in (HIGH, MEDIUM, LOW) if by_sev[s]))
+        lines.append(severity_line(by_sev))
         order = {HIGH: 0, MEDIUM: 1, LOW: 2}
         groups: dict[str, list[dict]] = {}
         for r in sorted(records, key=lambda r: (order.get(r["severity"], 3), r["time"])):
             groups.setdefault(r["rule"], []).append(r)
         for rule, items in groups.items():
-            title = RULES.get(rule, (rule, ""))[0]
-            lines += ["", f"{SEVERITY_ICON.get(items[0]['severity'], '⚪')} <b>{esc(title)}</b> ({len(items)})"]
+            lines += ["", f"{SEVERITY_ICON.get(items[0]['severity'], '⚪')} <b>{esc(rule_title(rule))}</b> ({len(items)})"]
             lines += [_digest_item(r) for r in items[:5]]
             if len(items) > 5:
                 lines.append(f"  <i>+{len(items) - 5} more</i>")

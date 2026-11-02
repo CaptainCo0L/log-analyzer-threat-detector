@@ -14,7 +14,7 @@ from collections import deque
 
 from .alertlog import upgrade
 from .model import HIGH
-from .sinks import RULES, SEVERITY_ICON, esc, fit, format_push, when
+from .sinks import SEVERITY_ICON, esc, fit, format_push, rule_title, when
 
 APEX = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")  # a plain domain: safe to put in a Block button
 QUIET = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)-([01]?\d|2[0-3]):([0-5]\d)")
@@ -145,10 +145,9 @@ class Delivery:
         opener = "While you were muted" if self.state.get(HELD_REASON) == "muted" else "While it was quiet"
         lines = [f"🔔 <b>{opener}: {len(held)} alert{'' if len(held) == 1 else 's'}</b>", ""]
         for r in held[:20]:
-            title = RULES.get(r["rule"], (r["rule"], ""))[0]
             domain = f" · <code>{esc(r['domain'])}</code>" if r.get("domain") else ""
             lines.append(f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r['label'])} · "
-                         f"{esc(title)}{domain}")
+                         f"{esc(rule_title(r['rule']))}{domain}")
         if len(held) > 20:
             lines.append(f"<i>+{len(held) - 20} more in the daily report</i>")
         targets = []
