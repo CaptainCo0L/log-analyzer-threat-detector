@@ -1,4 +1,4 @@
-"""Stage 2: buttons on pushed alerts, the rotation message and the daily report."""
+"""Stage 2: buttons on pushed alerts, the rotation message and the digest."""
 
 import json
 import time
@@ -167,7 +167,7 @@ def test_undo_on_an_older_rotation_is_refused_while_a_newer_one_stands(make_dete
     assert "newer" in det.telegram.messages[-1]
 
 
-# --- the daily report ----------------------------------------------------------------------
+# --- the digest ---------------------------------------------------------------------------
 
 def test_a_digest_with_alerts_offers_the_full_report(make_detector, tmp_path):
     bot, det, _ = setup(make_detector, tmp_path)

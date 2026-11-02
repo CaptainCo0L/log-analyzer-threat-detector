@@ -1,4 +1,4 @@
-"""Discovered names flowing through the detector: alerts, silent devices, the daily report."""
+"""Discovered names flowing through the detector: alerts, silent devices, the digest."""
 
 import time
 
@@ -63,7 +63,7 @@ def test_daily_report_shows_the_current_name_for_earlier_alerts(make_detector, t
     assert "Aswins-PC" in text and "(old label)" not in text
 
 
-# --- weekly discovery, just before the daily report --------------------------------------------
+# --- weekly discovery, just before the digest ---------------------------------------------------
 
 class FakeProbe:
     def __init__(self, found=None, error=None):

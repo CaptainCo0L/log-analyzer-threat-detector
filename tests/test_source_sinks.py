@@ -213,6 +213,11 @@ def test_telegram_failure_is_swallowed():
     assert Telegram("t", "c", opener=boom).send("x") is False
 
 
+def test_the_connection_test_calls_it_the_digest():
+    from pihole_detector.sinks import format_test
+    assert "09:00 digest" in format_test(False)
+
+
 def test_format_push_includes_block_hint():
     assert "<code>cmd</code>" in format_push(alert(block="cmd"))
     assert "To block" not in format_push(alert())

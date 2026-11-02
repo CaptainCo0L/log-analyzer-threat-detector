@@ -130,7 +130,7 @@ def main(argv=None) -> int:
     sp.add_argument("--days", type=float, default=7)
     sub.add_parser("digest", help="send the digest now (tests the Telegram setup)")
     sub.add_parser("test-push", help="send one test Telegram message")
-    sub.add_parser("preview", help="send an example alert and daily report")
+    sub.add_parser("preview", help="send an example alert and digest")
     rep = sub.add_parser("report", help="print a Markdown review of alerts.jsonl")
     rep.add_argument("--days", type=float, default=7)
     rep.add_argument("--file", help="alerts file (default: ALERTS_PATH)")
@@ -234,7 +234,7 @@ def cmd_report(cfg: Config, file: str | None, days: float) -> int:
 
 
 def cmd_preview(cfg: Config, tg=None, state=None) -> int:
-    """Send a sample alert and a sample daily report, clearly marked as examples. With the bot on, the
+    """Send a sample alert and a sample digest, clearly marked as examples. With the bot on, the
     sample carries real buttons (its domain is under .example, which never resolves, so Block is harmless)."""
     tg = tg or Telegram(cfg.telegram_token, cfg.telegram_chat_id)
     now = time.time()

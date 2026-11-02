@@ -107,7 +107,7 @@ def test_mute_changes_the_alert_and_its_row_becomes_the_undo(make_detector):
     press(bot, det, "Mute 7 d")
     assert len(det.telegram.messages) == sent
     edit = edits(det)[-1]
-    assert "🔕 Muted" in edit["text"] and "7 d" in edit["text"]
+    assert "🔕 Muted" in edit["text"] and "7 d" in edit["text"] and "in the digest" in edit["text"]
     assert "🔔 Undo mute" in labels(edit) and not any("Mute 24" in label for label in labels(edit))
     assert any("Block" in label for label in labels(edit))
 

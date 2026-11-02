@@ -132,18 +132,18 @@ class Detector:
         if now - self._last_stats >= 3600:
             self._last_stats = now
             # docker logs otherwise show only alerts; this proves polling is alive between them
-            log.info("stats: %d queries, %d HIGH, %d MEDIUM, %d LOW since the last report",
+            log.info("stats: %d queries, %d HIGH, %d MEDIUM, %d LOW since the last digest",
                      self.stats["queries"], self.stats["alert_HIGH"], self.stats["alert_MEDIUM"],
                      self.stats["alert_LOW"])
         self.directory.names.reload_if_changed()
         self.delivery.flush(now)
         if self.digests:
-            self.maybe_discover(now)  # first, so the report below already carries fresh names
+            self.maybe_discover(now)  # first, so the digest below already carries fresh names
             self.maybe_digest(now)
         return alerts
 
     def maybe_discover(self, now: float) -> bool:
-        """Once a week, at report time: ask the known devices for their names and save them."""
+        """Once a week, at digest time: ask the known devices for their names and save them."""
         local = time.localtime(now)
         today = time.strftime("%Y-%m-%d", local)
         if (local.tm_wday != self.cfg.discovery_weekday or local.tm_hour < self.cfg.digest_hour
@@ -153,7 +153,7 @@ class Detector:
         self.state.commit()
         try:
             self.discover_names(now)
-        except Exception:  # the report must still go out, with the names already saved
+        except Exception:  # the digest must still go out, with the names already saved
             log.exception("weekly name discovery failed")
         return True
 

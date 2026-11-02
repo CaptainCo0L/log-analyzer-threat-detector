@@ -58,7 +58,7 @@ MAX_REPORT_DAYS = 30
 SEE_STATUS = "/status shows whether Pi-hole is up."
 # Said the moment a button is pressed; the result then appears in the chat. Telegram allows one answer per press.
 PRESS_TOASTS = {"block": "Blocking…", "unblock": "Unblocking…", "mute": "Muting…", "unmute": "Unmuting…",
-                "unmute_all": "Unmuting…", "ops": "Working…", "undo_rotation": "Undoing…",
+                "unmute_all": "Ending the hold…", "ops": "Working…", "undo_rotation": "Undoing…",
                 "full_report": "Sending the full report…"}
 
 
@@ -229,7 +229,7 @@ class Bot:
         span = f"{hours // 24} d" if hours >= 48 else f"{hours} h"
         undo = self.delivery.button("🔔 Undo mute", {**payload, "kind": "unmute"}, now)
         self._settle(cb, MUTE_STATUS, "", f"🔕 Muted {title} for {payload['label']} for {span}, until "
-                     f"{when(now + hours * 3600)}. Those alerts are still logged and in the daily report.", [undo])
+                     f"{when(now + hours * 3600)}. Those alerts are still logged and in the digest.", [undo])
 
     def press_unmute(self, payload: dict, now: float, cb: dict | None = None) -> None:
         rule, ident, label = payload["rule"], payload["ident"], payload["label"]
@@ -416,7 +416,7 @@ class Bot:
         seconds = int(match[1]) * {"m": 60, "h": 3600, "d": 86400}[match[2]] if match else 3600
         seconds = min(max(seconds, 60), MAX_MUTE)
         self.delivery.mute_all(now + seconds)
-        unmute = self.delivery.button("🔔 Unmute now", {"kind": "unmute_all"}, now)
+        unmute = self.delivery.button("🔔 End the hold", {"kind": "unmute_all"}, now)
         self.reply(f"🔕 Instant alerts held until {esc(when(now + seconds))}. They're still logged, and you'll "
                    "get them in one message when it ends. Health and rotation messages still come through.",
                    buttons=[[unmute]])
@@ -428,7 +428,7 @@ class Bot:
         self.delivery.mute_all(0)
         held = self.delivery.held
         quiet = " Quiet hours still apply." if self.delivery.hold_reason(now) else ""
-        self.reply(f"🔔 Unmuted.{quiet}" + (f" The {held} held alert{'s' if held != 1 else ''} follow." if held and not quiet else ""))
+        self.reply(f"🔔 Hold ended.{quiet}" + (f" The {held} held alert{'s' if held != 1 else ''} follow." if held and not quiet else ""))
 
     def cmd_quiet(self, args, now) -> None:
         if not args:
@@ -509,10 +509,10 @@ class Bot:
                 actions.append("/resume turns it back on.")
         facts = [severity_line({s: stats.get(f"alert_{s}", 0) for s in (HIGH, MEDIUM, LOW)}, zeros=True)]
         if stats.get("api_failures"):
-            facts.append(f"⚠️ {stats['api_failures']} failed polls since the last report")
+            facts.append(f"⚠️ {stats['api_failures']} failed polls since the last digest")
         mute_until, quiet = self.delivery.mute_until, self.delivery.quiet
         if mute_until > now or quiet:
-            parts = [f"Muted until {esc(when(mute_until))}"] if mute_until > now else []
+            parts = [f"Held until {esc(when(mute_until))}"] if mute_until > now else []
             parts += [f"Quiet {esc(quiet)}" + (" (now)" if in_quiet(quiet, now) else "")] if quiet else []
             held = self.delivery.held
             facts.append("🔕 " + " · ".join(parts) + (f" · {held} held" if held else ""))
@@ -523,7 +523,7 @@ class Bot:
             pihole,
             f"Detector up {ago(now - self.started)} · {stats.get('queries', 0):,} lookups checked "
             f"since {esc(when(last)) if last else 'start'}",
-            f"Instant alerts {'on' if cfg.push_enabled else 'off'} · next report {esc(when(self.det.next_digest(now)))}",
+            f"Instant alerts {'on' if cfg.push_enabled else 'off'} · next digest {esc(when(self.det.next_digest(now)))}",
             f"Rotation sync {'on' if cfg.rotation_sync else 'off'} · nmap {'on' if cfg.nmap_enabled else 'off'}",
         ]))
 

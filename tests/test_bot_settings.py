@@ -64,7 +64,7 @@ def test_unmute_ends_it_early_and_the_summary_follows(make_detector):
     det.process_query(q("evil-c2.example", t=10))
     bot.handle(message("/unmute", date=T0 + 60), T0 + 60)
     det.tick(T0 + 61)
-    assert any("While you were muted" in m for m in det.telegram.messages)
+    assert any("While alerts were held" in m for m in det.telegram.messages)
     det.process_query(q("evil-c2.example", t=120))
     assert len(pushes(det)) == 1
 
@@ -100,7 +100,7 @@ def test_quiet_hours_hold_alerts_until_they_end(make_detector):
     assert pushes(det) == []
     det.tick(local(23, 59))
     det.tick(local(23, 59) + 8 * HOUR)  # 07:59 next day
-    assert any("While it was quiet" in m and "1 alert" in m for m in det.telegram.messages)
+    assert any("During quiet hours" in m and "1 alert" in m for m in det.telegram.messages)
 
 
 def test_quiet_rejects_nonsense_and_can_be_turned_off(make_detector):
@@ -181,7 +181,7 @@ def test_status_shows_mute_and_quiet(make_detector):
     bot.handle(message("/quiet 23:00-07:00"), T0)
     bot.handle(message("/status"), T0)
     text = det.telegram.messages[-1]
-    assert "Muted until" in text and "Quiet 23:00-07:00" in text
+    assert "Held until" in text and "Quiet 23:00-07:00" in text
 
 
 def test_settings_commands_are_write_commands_and_in_the_menu():

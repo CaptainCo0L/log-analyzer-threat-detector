@@ -16,6 +16,13 @@ def delivery(**cfg):
     return Delivery(Config(push_enabled=True, **cfg), State(":memory:"), FakeTelegram())
 
 
+def test_the_push_cap_notice_points_at_the_digest():
+    d = delivery(push_cap_per_hour=1)
+    d.route(alert(1))
+    d.route(alert(2))
+    assert "in the digest" in d.telegram.messages[-1] and "report" not in d.telegram.messages[-1]
+
+
 def test_alerts_held_across_a_deploy_still_appear_in_the_summary():
     d = delivery()
     d.state.put("bot:held", [{"time": T0, "severity": "HIGH", "rule": "ti_match", "client": "Old PC",

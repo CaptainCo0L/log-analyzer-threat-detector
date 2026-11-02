@@ -43,9 +43,10 @@ See [docs/detection-notes.md](docs/detection-notes.md) for how each heuristic wa
   The file rolls over yearly: the first alert of a new year moves last year's to
   `alerts-2026.jsonl` beside it. The digest, `/report`, `/whois` and `report` read across both.
   `pihole_changes.jsonl` rolls over the same way.
-- **HIGH** → Telegram immediately, capped at 20 per hour (then one "muted" notice).
+- **HIGH** → Telegram immediately, capped at 20 per hour (then one notice that pushes are paused).
 - **MEDIUM / LOW** → the daily 09:00 digest. The digest is **always** sent, even when empty, so
-  a missing digest means the detector is down.
+  a missing digest means the detector is down. A quiet day is one line. On a busy day HIGH and MEDIUM
+  alerts stay in view with a Block button per domain, and LOW alerts fold away.
 - **Health**: 3 failed polls in a row → "Pi-hole API unreachable". Pi-hole is the LAN's only
   DNS server, so this doubles as a LAN DNS outage alarm. A recovery message follows.
 
@@ -59,7 +60,7 @@ your private chat: an update counts only when both its chat and its sender are `
 
 | Command | Answer |
 | --- | --- |
-| `/status` | Pi-hole up and blocking, detector uptime, lookups and alerts since the last report |
+| `/status` | Pi-hole up and blocking, detector uptime, lookups and alerts since the last digest |
 | `/report [days]` | Alert summary for 1-30 days (default 7); **📄 Full report** sends it as a `.md` file |
 | `/devices [all]` | Devices that queried in the last 15 min, with name, IP and Pi-hole groups |
 | `/whois <name, IP or MAC>` | One device: MAC, name source, groups, top 10 domains of the last 24 h, last 5 alerts |
@@ -96,12 +97,12 @@ secrets can't be set from chat.
 Pushed alerts carry buttons:
 - **🛡 Block `<apex>`** (only when the domain resolved) adds a Pi-hole regex deny for the apex and every
   subdomain, for everyone (Default group), the same thing `pihole --wild` does.
-- **🔕 Mute 24 h / 7 d** silences that rule for that device. The alerts are still logged and still in the daily report.
+- **🔕 Mute 24 h / 7 d** silences that rule for that device. The alerts are still logged and still in the digest.
 - **📋 Copy block command** copies the NAS command, for when the bot isn't running.
 
 Pressing Block or Mute changes that alert instead of adding a message: the result appears on it and the
 button becomes its **↩️ Undo**. Other button replies have Undo too. The rotation-sync message has one as well: it reverses that change,
-but only while it is the device's newest one (the same rule as `clients-undo`). The daily report has
+but only while it is the device's newest one (the same rule as `clients-undo`). A digest with alerts has
 **📄 Full report**. `python -m pihole_detector preview` sends a sample alert with working buttons; its
 domain is under `.example`, which never resolves, so trying Block on it is harmless.
 
@@ -150,11 +151,11 @@ and prints a table plus a block to paste into Pi-hole's Clients comments. `names
 `names --save` also stores what it found in `data/names.json` (MAC → name, source, last confirmed).
 
 A device is named, in order, by: its **Pi-hole Clients comment**, then the **saved discovered
-name**, then Pi-hole's own hostname for it, then a vendor guess, then its IP. The daily report and `report` look names
+name**, then Pi-hole's own hostname for it, then a vendor guess, then its IP. The digest and `report` look names
 up when they are displayed, by the MAC in each alert, so a name found after an alert fired still
 shows; `alerts.jsonl` is never rewritten.
 
-The running service refreshes names itself: **every Monday at report time (`DISCOVERY_WEEKDAY`,
+The running service refreshes names itself: **every Monday at digest time (`DISCOVERY_WEEKDAY`,
 `DIGEST_HOUR`) it probes the known devices over unicast (mDNS, SSDP, NetBIOS) and saves the
 answers, then sends that day's report.** A device that does not answer keeps its previous name. If
 discovery fails the report still goes out.

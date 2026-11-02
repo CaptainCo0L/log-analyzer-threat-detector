@@ -100,12 +100,27 @@ def test_status_says_when_blocking_is_paused_and_how_to_resume(make_detector):
     assert "/resume" in visible(text)
 
 
+def test_status_names_the_next_digest(make_detector):
+    bot, det, _ = make_bot(make_detector)
+    det.stats["api_failures"] = 2
+    text = reply(bot, det, "/status")
+    assert "next digest" in folded(text) and "since the last digest" in visible(text)
+    assert "report" not in text
+
+
+def test_ending_a_hold_says_so(make_detector):
+    bot, det, _ = make_bot(make_detector)
+    reply(bot, det, "/mute 1h")
+    assert det.telegram.payloads()[-1]["reply_markup"]["inline_keyboard"][0][0]["text"] == "🔔 End the hold"
+    assert reply(bot, det, "/unmute").startswith("🔔 Hold ended.")
+
+
 def test_status_keeps_holds_and_failed_polls_in_view(make_detector):
     bot, det, _ = make_bot(make_detector)
     det.stats["api_failures"] = 2
     reply(bot, det, "/mute 1h")
     text = reply(bot, det, "/status")
-    assert "2 failed polls" in visible(text) and "Muted until" in visible(text) and "/unmute" in visible(text)
+    assert "2 failed polls" in visible(text) and "Held until" in visible(text) and "/unmute" in visible(text)
 
 
 # --- /whois ---------------------------------------------------------------------------------

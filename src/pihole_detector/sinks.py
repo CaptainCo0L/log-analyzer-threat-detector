@@ -212,7 +212,7 @@ def format_up(seconds: float) -> str:
 
 def format_test(push_enabled: bool) -> str:
     mode = ("ON - HIGH alerts arrive instantly" if push_enabled
-            else "OFF (trial mode) - everything goes into the 09:00 report")
+            else "OFF (trial mode) - everything goes into the 09:00 digest")
     return layout("👋", "Pi-hole detector connected", [f"Instant alerts: {mode}."])
 
 

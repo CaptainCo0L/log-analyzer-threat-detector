@@ -107,7 +107,7 @@ class Delivery:
                 self._over_cap = True
                 self.telegram.send(f"🔕 <b>Too many alerts</b>\n\nMore than {cap} in an hour, so instant "
                                    "alerts are paused for up to an hour. Everything is still logged and "
-                                   "will be in the daily report.")
+                                   "will be in the digest.")
             return False
         self._over_cap = False
         self._pushed.append(now)
@@ -146,14 +146,14 @@ class Delivery:
 
     def _held_summary(self, held: list[dict], now: float) -> tuple[str, list]:
         """One message for everything held back, with a Block button per domain."""
-        opener = "While you were muted" if self.state.get(HELD_REASON) == "muted" else "While it was quiet"
+        opener = "While alerts were held" if self.state.get(HELD_REASON) == "muted" else "During quiet hours"
         lines = [f"🔔 <b>{opener}: {len(held)} alert{'' if len(held) == 1 else 's'}</b>", ""]
         for r in held[:20]:
             domain = f" · <code>{esc(r['domain'])}</code>" if r.get("domain") else ""
             lines.append(f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r['label'])} · "
                          f"{esc(rule_title(r['rule']))}{domain}")
         if len(held) > 20:
-            lines.append(f"<i>+{len(held) - 20} more in the daily report</i>")
+            lines.append(f"<i>+{len(held) - 20} more in the digest</i>")
         return fit("\n".join(lines)), self.block_rows(held, now, limit=10)
 
     def block_rows(self, records: list[dict], now: float, limit: int) -> list[list[dict]]:
