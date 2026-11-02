@@ -40,6 +40,10 @@ class ApiError(Exception):
     pass
 
 
+class NotFound(ApiError):
+    """Pi-hole answered, and has no such item (HTTP 404)."""
+
+
 class PiholeApi:
     """Minimal FTL v6 client. One session, re-authenticated on 401, logged out on close.
 
@@ -92,7 +96,7 @@ class PiholeApi:
                 if exc.code == 401 and attempt == 1:
                     self.sid = None  # expired; log in again once
                     continue
-                raise ApiError(f"{method} {path}: HTTP {exc.code}") from exc
+                raise (NotFound if exc.code == 404 else ApiError)(f"{method} {path}: HTTP {exc.code}") from exc
             except (urllib.error.URLError, OSError, ValueError) as exc:
                 raise ApiError(f"{method} {path}: {exc}") from exc
         raise ApiError(f"{method} {path}: unauthorised")

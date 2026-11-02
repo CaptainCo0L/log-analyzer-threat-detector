@@ -14,8 +14,7 @@ import threading
 import time
 from collections import Counter
 
-from .changes import (Change, add_client, add_domain, delete_client, delete_domain, list_exact, list_wild,
-                      set_blocking, update_client, wild_regex)
+from .changes import Change, add_client, delete_client, list_exact, list_wild, set_blocking, update_client
 from .domains import apex
 from .names import ipv4_of
 from .report import build_report
@@ -275,20 +274,17 @@ class Bot:
         self._change(f"/allow {' '.join(args)}", change, f"✅ Allowed {what} for everyone.", now)
 
     def _remove_listed(self, list_type: str, args, now) -> None:
-        """Remove every entry the bot could have added for this domain (exact and wildcard)."""
-        _, domain = self._domain_arg(args, f"/un{'block' if list_type == 'deny' else 'allow'} <domain>")
+        command = "/unblock" if list_type == "deny" else "/unallow"
+        _, domain = self._domain_arg(args, f"{command} <domain>")
         if not domain:
             return
-        removed = []
-        for kind, value in (("regex", wild_regex(apex(domain))), ("exact", domain)):
-            try:
-                self.changes.apply([delete_domain(list_type, kind, value)], now, f"/un{list_type} {domain}")
-                removed.append(add_domain(list_type, kind, value))
-            except Exception:
-                continue  # not on the list in that form
-        listed = "deny" if list_type == "deny" else "allow"
+        removed, error = self.changes.unlist(list_type, domain, now, f"{command} {domain}")
+        if error:
+            partly = " Part of it was already removed; Undo puts that back." if removed else ""
+            self.reply(f"⚠️ Pi-hole refused that: {esc(error)}{partly}", buttons=self._undo_button(removed, now))
+            return
         if not removed:
-            self.reply(f"<code>{esc(domain)}</code> wasn't on Pi-hole's {listed} list, as an exact name or with subdomains.")
+            self.reply(f"<code>{esc(domain)}</code> wasn't on Pi-hole's {list_type} list, as an exact name or with subdomains.")
             return
         verb = "Unblocked" if list_type == "deny" else "Removed the allow for"
         self.reply(f"{'🔓' if list_type == 'deny' else '🚫'} {verb} <code>{esc(domain)}</code>.",

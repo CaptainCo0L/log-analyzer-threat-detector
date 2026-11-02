@@ -100,8 +100,8 @@ class FakePihole:
     def delete_domain(self, list_type, kind, domain):
         self._check("delete_domain")
         if domain in self.missing:
-            from pihole_detector.source import ApiError
-            raise ApiError(f"DELETE /domains/{list_type}/{kind}: HTTP 404")
+            from pihole_detector.source import NotFound
+            raise NotFound(f"DELETE /domains/{list_type}/{kind}: HTTP 404")
         self.calls.append(("delete_domain", list_type, kind, domain))
 
     def set_blocking(self, enabled, timer=None):

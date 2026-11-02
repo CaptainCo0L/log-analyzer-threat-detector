@@ -18,10 +18,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import yearlog
+from .domains import apex
 from .names import same_name
 from .rotation import Client, SyncPlan
 from .sinks import when
-from .source import PiholeClient
+from .source import NotFound, PiholeClient
 
 
 # Ops, built here so the op format stays in this module. Each returns a JSON-ready list.
@@ -89,6 +90,20 @@ class PiholeChanges:
         finally:
             if done:
                 yearlog.append(self.cfg.pihole_changes_path, {"time": now, "command": command, "ops": done})
+
+    def unlist(self, list_type: str, domain: str, now: float, command: str) -> tuple[list, str | None]:
+        """Remove every entry the bot could have added for this domain, exact or wildcard, whichever exist.
+        Returns (ops that put back what was removed, error). Stops at the first real failure."""
+        restore: list = []
+        for kind, value in (("regex", wild_regex(apex(domain))), ("exact", domain)):
+            try:
+                self.apply([delete_domain(list_type, kind, value)], now, command)
+                restore.append(add_domain(list_type, kind, value))
+            except NotFound:
+                continue  # not on the list in that form
+            except Exception as exc:
+                return restore, str(exc)
+        return restore, None
 
     @property
     def pihole(self) -> PiholeClient:

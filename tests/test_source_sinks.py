@@ -6,7 +6,7 @@ import pytest
 
 from pihole_detector.model import Alert
 from pihole_detector.sinks import Telegram, build_digest, format_push
-from pihole_detector.source import ApiError, PiholeApi
+from pihole_detector.source import ApiError, NotFound, PiholeApi
 from conftest import T0
 
 
@@ -88,6 +88,16 @@ def test_overlapping_timestamps_across_pages():
     rows = api_rows(30, step=0)   # all at the same instant, ids differ
     api = PiholeApi("http://pihole:8081", "pw", opener=FakeFtl(rows))
     assert len(api.queries_since(T0, page=10)) == 30
+
+
+@pytest.mark.parametrize("code, error", [(404, NotFound), (500, ApiError)])
+def test_only_a_404_counts_as_not_found(code, error):
+    def opener(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, code, "no", {}, None)
+
+    with pytest.raises(ApiError) as caught:
+        PiholeApi("http://pi", "", opener=opener).delete_domain("deny", "exact", "a.example")
+    assert caught.type is error
 
 
 def test_reauthenticates_once_on_401():

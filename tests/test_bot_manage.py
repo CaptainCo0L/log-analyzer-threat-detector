@@ -81,6 +81,36 @@ def test_unblock_removes_what_the_bot_could_have_added_and_says_what_it_found(ma
     assert "wasn't on" in det.telegram.messages[-1]
 
 
+def test_unblock_with_pihole_failing_says_so_instead_of_not_listed(make_detector, tmp_path):
+    bot, det, api = setup(make_detector, tmp_path)
+    api.fail = {"delete_domain": "DELETE /domains/deny/regex: connection refused"}
+    bot.handle(message("/unblock tracker.example"), T0)
+    assert "wasn't on" not in det.telegram.messages[-1] and "connection refused" in det.telegram.messages[-1]
+
+
+def test_unblock_failing_part_way_keeps_what_it_removed_undoable(make_detector, tmp_path):
+    bot, det, api = setup(make_detector, tmp_path)
+    original = api.delete_domain
+
+    def regex_works_then_pihole_dies(list_type, kind, domain):
+        original(list_type, kind, domain)
+        api.fail = {"delete_domain": "connection refused"}
+
+    api.delete_domain = regex_works_then_pihole_dies
+    bot.handle(message("/unblock ads.tracker.example"), T0)
+    assert "connection refused" in det.telegram.messages[-1]
+    undo_last(bot, det)
+    assert api.calls[-1] == ("add_domain", "deny", "regex", TRACKER)
+
+
+def test_unblock_logs_the_command_the_owner_sent(make_detector, tmp_path):
+    bot, det, api = setup(make_detector, tmp_path)
+    api.missing = {"tracker.example"}
+    bot.handle(message("/unblock tracker.example"), T0)
+    line = json.loads((tmp_path / "pihole_changes.jsonl").read_text().splitlines()[0])
+    assert line["command"] == "/unblock tracker.example"
+
+
 def test_unallow_mirrors_unblock(make_detector, tmp_path):
     bot, det, api = setup(make_detector, tmp_path)
     bot.handle(message("/unallow cdn.shop.example"), T0)
