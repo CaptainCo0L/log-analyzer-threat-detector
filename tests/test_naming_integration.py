@@ -138,7 +138,7 @@ def test_a_failed_discovery_does_not_stop_the_report(make_detector, tmp_path):
     det.probe = FakeProbe(error=OSError("network unreachable"))
     report_due(det, MONDAY_9AM)
     det.tick(MONDAY_9AM)
-    assert "Pi-hole daily report" in det.telegram.messages[-1]
+    assert "Digest:" in det.telegram.messages[-1]
 
 
 def test_a_names_file_saved_by_hand_is_picked_up_without_a_restart(make_detector, tmp_path):

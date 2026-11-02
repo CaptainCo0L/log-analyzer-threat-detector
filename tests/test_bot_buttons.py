@@ -169,8 +169,9 @@ def test_undo_on_an_older_rotation_is_refused_while_a_newer_one_stands(make_dete
 
 # --- the daily report ----------------------------------------------------------------------
 
-def test_the_daily_report_offers_the_full_report(make_detector, tmp_path):
+def test_a_digest_with_alerts_offers_the_full_report(make_detector, tmp_path):
     bot, det, _ = setup(make_detector, tmp_path)
+    det.process_query(q("dns.google"))
     det.state.put("last_digest", T0 - DAY)
     det.maybe_digest(T0, force=True)
     full = button(det, "Full report")

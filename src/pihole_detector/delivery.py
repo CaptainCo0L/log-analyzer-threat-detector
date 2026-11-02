@@ -14,7 +14,7 @@ from collections import deque
 
 from .alertlog import upgrade
 from .model import HIGH
-from .sinks import SEVERITY_ICON, esc, fit, format_push, rule_title, when
+from .sinks import SEVERITY_ICON, esc, fit, format_push, needs_attention, rule_title, when
 
 APEX = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")  # a plain domain: safe to put in a Block button
 QUIET = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)-([01]?\d|2[0-3]):([0-5]\d)")
@@ -154,14 +154,14 @@ class Delivery:
                          f"{esc(rule_title(r['rule']))}{domain}")
         if len(held) > 20:
             lines.append(f"<i>+{len(held) - 20} more in the daily report</i>")
-        targets = []
-        for r in held:
-            target = block_target(r.get("evidence"))
-            if target and target not in targets:
-                targets.append(target)
-        buttons = [[self.button(f"🛡 Block {t}", {"kind": "block", "domain": t}, now, "danger")]
-                   for t in targets[:10]]
-        return fit("\n".join(lines)), buttons
+        return fit("\n".join(lines)), self.block_rows(held, now, limit=10)
+
+    def block_rows(self, records: list[dict], now: float, limit: int) -> list[list[dict]]:
+        """One Block button per domain that needs attention, HIGH alerts first."""
+        urgent = sorted((r for r in records if needs_attention(r)), key=lambda r: r["severity"] != HIGH)
+        targets = dict.fromkeys(t for r in urgent if (t := block_target(r.get("evidence"))))
+        return [[self.button(f"🛡 Block {t}", {"kind": "block", "domain": t}, now, "danger")]
+                for t in list(targets)[:limit]]
 
     # muting ---------------------------------------------------------------------------------
     def is_muted(self, alert, now: float) -> bool:

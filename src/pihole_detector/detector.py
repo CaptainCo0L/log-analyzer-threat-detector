@@ -212,9 +212,10 @@ class Detector:
         records = self.directory.relabel(self.alert_log.read(last or 0, now))
         text = build_digest(records, dict(self.stats), start=last or now, end=now)
         buttons = None
-        if self.cfg.bot_enabled:
+        if self.cfg.bot_enabled and records:
             days = max(1, round((now - (last or now)) / 86400))
-            buttons = [[self.delivery.button("📄 Full report", {"kind": "full_report", "days": days, "end": now}, now)]]
+            full = self.delivery.button("📄 Full report", {"kind": "full_report", "days": days, "end": now}, now)
+            buttons = [*self.delivery.block_rows(records, now, limit=5), [full]]
         sent = self.delivery.send(text, buttons)
         # The digest doubles as the heartbeat, so leave a trace of it either way.
         log.info("digest %s: %d alert(s)", "sent" if sent else "NOT sent", len(records))

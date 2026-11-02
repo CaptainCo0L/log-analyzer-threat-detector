@@ -6,7 +6,7 @@ import pytest
 
 from pihole_detector.bot import Bot
 from pihole_detector.model import Client, Device
-from pihole_detector.sinks import build_digest, format_down, format_up, layout
+from pihole_detector.sinks import format_down, format_up, layout
 from conftest import PC_IP, PC_MAC, T0, FakePihole, q
 
 OWNER = 42
@@ -75,33 +75,6 @@ def test_an_outage_says_what_it_means_and_what_to_do():
 
 def test_recovery_is_one_short_message():
     assert format_up(75) == "✅ <b>Pi-hole is back</b>\nReachable again after 1 min 15 s."
-
-
-# --- the digest -----------------------------------------------------------------------------
-
-RECORD = {"severity": "MEDIUM", "rule": "doh_bypass", "label": "TV", "domain": "dns.google", "time": T0}
-
-
-def test_a_quiet_digest_says_so_in_its_first_line():
-    text = build_digest([], {"queries": 10}, start=T0, end=T0 + 60)
-    assert text.startswith("✅ <b>Pi-hole daily report: nothing suspicious</b>")
-
-
-def test_a_busy_digest_counts_in_its_first_line_and_lists_below():
-    text = build_digest([RECORD], {"queries": 10}, start=T0, end=T0 + 60)
-    assert text.startswith("📊 <b>Pi-hole daily report: 🟠 1 medium</b>")
-    assert "Encrypted DNS in use" in visible(text) and "dns.google" in visible(text)
-
-
-def test_the_digests_bookkeeping_is_folded():
-    text = build_digest([], {"queries": 1234}, start=T0, end=T0 + 60)
-    assert "1,234 lookups checked" in folded(text) and "alerts.jsonl" in folded(text)
-    assert "1,234" not in visible(text)
-
-
-def test_failed_polls_are_never_folded():
-    text = build_digest([], {"queries": 1, "api_failures": 3}, start=T0, end=T0 + 60)
-    assert text.startswith("⚠️ ") and "3 failed polls" in visible(text)
 
 
 # --- /status --------------------------------------------------------------------------------

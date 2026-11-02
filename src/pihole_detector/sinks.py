@@ -159,28 +159,42 @@ def _digest_item(r: dict) -> str:
     return f"• {who} → <code>{esc(r.get('domain'))}</code>"
 
 
+def needs_attention(record: dict) -> bool:
+    """LOW alerts are worth a look, not a person's attention."""
+    return record.get("severity") in (HIGH, MEDIUM)
+
+
+def _digest_group(rule: str, items: list[dict]) -> list[str]:
+    title = f"{SEVERITY_ICON.get(items[0]['severity'], '⚪')} <b>{esc(rule_title(rule))}</b> ({len(items)})"
+    more = [f"  <i>+{len(items) - 3} more</i>"] if len(items) > 3 else []
+    return [title, *(_digest_item(r) for r in items[:3]), *more]
+
+
 def build_digest(records: list[dict], stats: dict, start: float | None = None, end: float | None = None) -> str:
-    """One daily message. Always sent, even when empty: a missing digest means the detector died."""
-    end = end or time.time()
-    by_sev = Counter(r["severity"] for r in records)
+    """One daily message. Always sent, even when empty: a missing digest means the detector died. A quiet day
+    is one line; on a busy one, only what needs attention is in view."""
     failures = stats.get("api_failures", 0)
     count = stats.get("queries", 0)
+    lookups = f"{count:,} lookup{'' if count == 1 else 's'}"
+    if not records and not failures:
+        return layout("✅", f"Digest: nothing suspicious in {lookups}")
+    end = end or time.time()
     facts = [f"⚠️ {failures} failed polls"] if failures else []
+    fold: list[str] = []
     order = {HIGH: 0, MEDIUM: 1, LOW: 2}
     groups: dict[str, list[dict]] = {}
     for r in sorted(records, key=lambda r: (order.get(r["severity"], 3), r["time"])):
         groups.setdefault(r["rule"], []).append(r)
     for rule, items in groups.items():
-        facts += ["", f"{SEVERITY_ICON.get(items[0]['severity'], '⚪')} <b>{esc(rule_title(rule))}</b> ({len(items)})"]
-        facts += [_digest_item(r) for r in items[:5]]
-        if len(items) > 5:
-            facts.append(f"  <i>+{len(items) - 5} more</i>")
-    icon = "⚠️" if failures else "📊" if records else "✅"
-    summary = severity_line(by_sev) if records else "nothing suspicious"
+        if needs_attention(items[0]):
+            facts += ["", *_digest_group(rule, items)]
+        else:
+            fold += _digest_group(rule, items)
+    icon = "⚠️" if failures else "📊"
+    summary = severity_line(Counter(r["severity"] for r in records)) if records else "nothing suspicious"
     window = f"{when(start)} → {when(end)}" if start else ""
-    return layout(icon, f"Pi-hole daily report: {esc(summary)}", facts, details=[
-        esc(window), f"Detector running · {count:,} lookup{'' if count == 1 else 's'} checked",
-        "Full details: data/alerts.jsonl on the NAS"])
+    return layout(icon, f"Digest: {esc(summary)}", facts, details=[
+        *fold, esc(window), f"{lookups} checked", "Full details: data/alerts.jsonl on the NAS"])
 
 
 def format_down(failures: int, reason: str) -> str:
