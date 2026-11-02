@@ -1,6 +1,6 @@
 # 4. Pushes, the digest and /status are picture cards, drawn with Pillow
 
-Date: 2026-11-02 · Status: accepted
+Date: 2026-11-02 · Status: superseded by [ADR 0005](0005-rich-messages-in-telegram.md)
 
 ## Context
 
