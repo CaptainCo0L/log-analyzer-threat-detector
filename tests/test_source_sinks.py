@@ -198,7 +198,7 @@ def test_config_strips_crlf_from_env_values():
 
 # sinks ------------------------------------------------------------------------
 def alert(sev="HIGH", rule="ti_match", msg="m", block=None):
-    return Alert(time=T0, severity=sev, rule=rule, client="c", domain="d", message=msg,
+    return Alert(time=T0, severity=sev, rule=rule, label="c", domain="d", message=msg,
                  evidence={"block": block}, dedup=rule)
 
 
@@ -218,8 +218,8 @@ def test_format_push_includes_block_hint():
 
 
 def test_format_push_escapes_html_and_hides_duplicate_ip():
-    a = Alert(time=T0, severity="MEDIUM", rule="dga_single", client="192.0.2.5", domain="a<b>.example",
-              message="m", address="192.0.2.5 · 02:00:00:00:00:05")
+    a = Alert(time=T0, severity="MEDIUM", rule="dga_single", label="192.0.2.5", domain="a<b>.example",
+              message="m", mac="02:00:00:00:00:05", ips=("192.0.2.5",))
     text = format_push(a)
     assert "a&lt;b&gt;.example" in text and "<b>.example" not in text
     assert "<i>02:00:00:00:00:05</i>" in text

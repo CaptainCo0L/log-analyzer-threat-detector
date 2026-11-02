@@ -12,6 +12,7 @@ import re
 import time
 from collections import deque
 
+from .alertlog import upgrade
 from .model import HIGH
 from .sinks import RULES, SEVERITY_ICON, esc, fit, format_push, when
 
@@ -26,12 +27,6 @@ MUTE_UNTIL, QUIET_HOURS, HELD, HELD_REASON = "bot:mute_until", "bot:quiet", "bot
 
 def mute_key(rule: str, ident: str) -> str:
     return f"mute:{rule}|{ident}"
-
-
-def alert_ident(alert) -> str:
-    """The device an alert is about: dedup keys are "rule|ident[|apex]"."""
-    parts = alert.dedup.split("|")
-    return parts[1] if len(parts) > 1 else alert.client
 
 
 def in_quiet(quiet: str | None, now: float) -> bool:
@@ -67,7 +62,7 @@ def alert_buttons(state, alert, now: float) -> list[list[dict]]:
     target = block_target(alert.evidence)
     if target:
         rows.append([action_button(state, f"🛡 Block {target}", {"kind": "block", "domain": target}, now, "danger")])
-    mute = {"kind": "mute", "rule": alert.rule, "ident": alert_ident(alert), "label": alert.client}
+    mute = {"kind": "mute", "rule": alert.rule, "ident": alert.device, "label": alert.label}
     rows.append([action_button(state, "🔕 Mute 24 h", {**mute, "hours": 24}, now),
                  action_button(state, "🔕 Mute 7 d", {**mute, "hours": 168}, now)])
     if command and len(command) <= 256:  # copy_text holds 1-256 characters
@@ -139,7 +134,7 @@ class Delivery:
         held = self.state.get(HELD)
         if not held or self.hold_reason(now):
             return False
-        text, buttons = self._held_summary(held, now)
+        text, buttons = self._held_summary([upgrade(r) for r in held], now)  # may predate a deploy
         self.send(text, buttons)
         self.state.put(HELD, [])
         self.state.put(HELD_REASON, None)
@@ -152,7 +147,7 @@ class Delivery:
         for r in held[:20]:
             title = RULES.get(r["rule"], (r["rule"], ""))[0]
             domain = f" · <code>{esc(r['domain'])}</code>" if r.get("domain") else ""
-            lines.append(f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r.get('client'))} · "
+            lines.append(f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r['label'])} · "
                          f"{esc(title)}{domain}")
         if len(held) > 20:
             lines.append(f"<i>+{len(held) - 20} more in the daily report</i>")
@@ -167,7 +162,7 @@ class Delivery:
 
     # muting ---------------------------------------------------------------------------------
     def is_muted(self, alert, now: float) -> bool:
-        return (self.state.get(mute_key(alert.rule, alert_ident(alert))) or 0) > now
+        return (self.state.get(mute_key(alert.rule, alert.device)) or 0) > now
 
     def mute(self, rule: str, ident: str, until: float) -> None:
         """Drop one rule's pushes for one device until `until` (0 lifts it)."""

@@ -79,17 +79,28 @@ class Device:
         return self.is_real_mac and int(self.hwaddr[:2], 16) & 2 == 2
 
 
+def join_address(ips, mac: str | None) -> str:
+    """How an alert's addresses read in a message."""
+    return " · ".join([*(ips or ()), *([mac] if mac else [])])
+
+
 @dataclass(frozen=True)
 class Alert:
     time: float
     severity: str
     rule: str
-    client: str
+    label: str          # what the device was called when this fired
     domain: str
     message: str
     evidence: dict = field(default_factory=dict)
     dedup: str = ""
-    address: str = ""   # "ip · mac" of the client, for messages that show a friendly name
+    device: str = ""    # the device, the same across its MACs
+    mac: str = ""       # the MAC in use, when known
+    ips: tuple[str, ...] = ()
+
+    @property
+    def address(self) -> str:
+        return join_address(self.ips, self.mac)
 
     def to_dict(self) -> dict:
         return asdict(self)

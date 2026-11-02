@@ -37,8 +37,13 @@ class Seen:
     label: str          # friendly name (Pi-hole client comment / hostname), else the IP
     apex: str
     now: float
-    address: str = ""   # "ip · mac"
-    origin: str = ""    # the MAC this query came from, else the IP: what Pi-hole's groups list
+    ip: str = ""
+    mac: str = ""       # the MAC this query came from, when known
+
+    @property
+    def origin(self) -> str:
+        """The sender as Pi-hole's groups list it: the MAC in use, else the IP."""
+        return self.mac or self.ip
 
 
 def block_hint(domain: str) -> str:
@@ -47,19 +52,21 @@ def block_hint(domain: str) -> str:
 
 
 def make_alert(
-    severity: str, rule: str, seen: Seen, domain: str, message: str, evidence: dict, per_client: bool = False
+    severity: str, rule: str, seen: Seen, domain: str, message: str, evidence: dict, per_device: bool = False
 ) -> Alert:
-    """Dedup is per (rule, client, apex), or per (rule, client) for burst rules spanning many apexes."""
+    """Dedup is per (rule, device, apex), or per (rule, device) for burst rules spanning many apexes."""
     return Alert(
         time=seen.now,
         severity=severity,
         rule=rule,
-        client=seen.label,
+        label=seen.label,
         domain=domain,
         message=message,
         evidence=evidence,
-        dedup=f"{rule}|{seen.ident}" + ("" if per_client else f"|{seen.apex}"),
-        address=seen.address,
+        dedup=f"{rule}|{seen.ident}" + ("" if per_device else f"|{seen.apex}"),
+        device=seen.ident,
+        mac=seen.mac,
+        ips=(seen.ip,),
     )
 
 

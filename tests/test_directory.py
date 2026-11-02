@@ -43,5 +43,5 @@ def test_previous_mac_trusts_only_the_names_rotation_sync_trusts(tmp_path):
 
 
 def test_relabel_names_records_by_their_mac(tmp_path):
-    record = {"client": "old", "address": f"{IP} · {MAC}"}
-    assert directory(tmp_path, {MAC: "New"}).relabel([record])[0]["client"] == "New"
+    record = {"label": "old", "mac": MAC, "ips": [IP]}
+    assert directory(tmp_path, {MAC: "New"}).relabel([record])[0]["label"] == "New"

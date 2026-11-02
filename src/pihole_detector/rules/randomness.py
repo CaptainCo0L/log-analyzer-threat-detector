@@ -76,7 +76,7 @@ class NxdomainBurst(QueryRule):
             f"{seen.label} got NXDOMAIN for {len(unique)} random-looking names in "
             f"{int(ctx.cfg.nxdomain_window // 60)} min (possible DGA malware hunting for its C2)",
             {"unique": len(unique), "samples": sorted(unique)[:10]},
-            per_client=True,
+            per_device=True,
         )]
 
     def prune(self, now: float) -> None:

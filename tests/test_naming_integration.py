@@ -23,21 +23,21 @@ def test_alert_uses_the_saved_name_when_there_is_no_clients_comment(make_detecto
     det = with_store(make_detector(), tmp_path)
     det.directory.names.update({PC_MAC: ("Aswins-PC", "mDNS")}, T0)
     alerts = det.process_query(evil())
-    assert [a.client for a in alerts] == ["Aswins-PC"]
+    assert [a.label for a in alerts] == ["Aswins-PC"]
 
 
 def test_clients_comment_beats_the_saved_name(make_detector, tmp_path):
     det = with_store(make_detector(), tmp_path)
     det.intel.names[PC_MAC] = "AswinPC"
     det.directory.names.update({PC_MAC: ("desktop-x", "mDNS")}, T0)
-    assert [a.client for a in det.process_query(evil())] == ["AswinPC"]
+    assert [a.label for a in det.process_query(evil())] == ["AswinPC"]
 
 
 def test_saved_name_beats_the_pihole_hostname(make_detector, tmp_path):
     det = with_store(make_detector(), tmp_path)
     det.directory.names.update({PC_MAC: ("Aswins-PC", "mDNS")}, T0)
     query = q("evil-c2.example", 0, name="(192.0.2.10, 02:00:00:00:00:10)")
-    assert [a.client for a in det.process_query(query)] == ["Aswins-PC"]
+    assert [a.label for a in det.process_query(query)] == ["Aswins-PC"]
 
 
 def test_silent_device_label_picks_up_a_saved_name(make_detector, tmp_path):
@@ -49,8 +49,9 @@ def test_silent_device_label_picks_up_a_saved_name(make_detector, tmp_path):
 
 
 def old_alert(det, address):
-    det.alert_log.write(Alert(time=MONDAY_9AM - 3600, severity="MEDIUM", rule="beaconing", client="(old label)",
-                          domain="tick.example", message="m", address=address, evidence={"interval_s": 60}))
+    det.alert_log.write(Alert(time=MONDAY_9AM - 3600, severity="MEDIUM", rule="beaconing", label="(old label)",
+                          domain="tick.example", message="m", mac=PC_MAC if PC_MAC in address else "",
+                          ips=(address.split(" · ")[0],), evidence={"interval_s": 60}))
 
 
 def test_daily_report_shows_the_current_name_for_earlier_alerts(make_detector, tmp_path):

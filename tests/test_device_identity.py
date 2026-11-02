@@ -47,6 +47,19 @@ def test_a_mute_follows_the_device(make_detector):
     assert len(det.telegram.messages) == pushes
 
 
+def test_an_alert_names_both_the_device_and_the_mac_it_used(make_detector):
+    det = settled(make_detector)
+    rotate(det)
+    alert = det.process_query(q("evil-c2.example", t=LATER + 200, ip=NEW_IP))[0]
+    assert (alert.device, alert.mac, alert.ips) == (OLD, NEW, (NEW_IP,))
+
+
+def test_silence_is_reported_for_the_device_it_is_about(make_detector):
+    det = settled(make_detector, silent_min_queries=2)
+    alert = silent_devices(det.ctx, T0 + LATER + 2 * DAY, det.labels)[0]
+    assert (alert.device, alert.mac, alert.ips) == (OLD, OLD, ())
+
+
 def test_an_alert_deduplicated_for_the_device_stays_so_on_its_new_mac(make_detector):
     det = settled(make_detector)
     assert rules_of(det.process_query(q("evil-c2.example", t=LATER + 50, ip=OLD_IP))) == ["ti_match"]

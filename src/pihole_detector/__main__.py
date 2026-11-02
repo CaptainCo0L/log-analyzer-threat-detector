@@ -238,8 +238,8 @@ def cmd_preview(cfg: Config, tg=None, state=None) -> int:
     tg = tg or Telegram(cfg.telegram_token, cfg.telegram_chat_id)
     now = time.time()
     sample = Alert(
-        time=now, severity="HIGH", rule="ti_match", client="Pixel 6 Pro", domain="login.evil-c2.example",
-        address="192.0.2.30 · 02:00:00:00:00:30", dedup="ti_match|example|evil-c2.example",
+        time=now, severity="HIGH", rule="ti_match", label="Pixel 6 Pro", domain="login.evil-c2.example",
+        device="example", mac="02:00:00:00:00:30", ips=("192.0.2.30",), dedup="ti_match|example|evil-c2.example",
         message="example", evidence={"matched": "evil-c2.example", "block": block_hint("evil-c2.example")},
     )
     buttons = None
@@ -252,9 +252,9 @@ def cmd_preview(cfg: Config, tg=None, state=None) -> int:
             state.close()
     report = build_digest([
         {**sample.to_dict()},
-        {"severity": "MEDIUM", "rule": "beaconing", "client": "AswinPC", "domain": "checkin.example",
+        {"severity": "MEDIUM", "rule": "beaconing", "label": "AswinPC", "domain": "checkin.example",
          "evidence": {"interval_s": 60}, "time": now},
-        {"severity": "LOW", "rule": "device_silent", "client": "iPad", "evidence": {"hours": 26}, "time": now},
+        {"severity": "LOW", "rule": "device_silent", "label": "iPad", "evidence": {"hours": 26}, "time": now},
     ], {"queries": 31204}, start=now - 86400, end=now)
     banner = "🧪 <i>Example - not a real alert</i>\n\n"
     ok = tg.send(banner + format_push(sample, hint=not buttons), buttons=buttons)

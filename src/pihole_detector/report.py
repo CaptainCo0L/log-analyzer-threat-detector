@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections import Counter
 
-from .model import HIGH, LOW, MEDIUM
+from .model import HIGH, LOW, MEDIUM, join_address
 
 HOUR = 3600
 
@@ -58,17 +58,17 @@ def _by_rule(records: list[dict]) -> list[str]:
     lines = ["## By rule", "| Rule | Severity | Alerts | Devices | Domains |", "| --- | --- | ---: | ---: | ---: |"]
     for rule, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
         sev = min((r["severity"] for r in items), key=lambda s: SEVERITY_ORDER.get(s, 3))
-        devices = len({r["client"] for r in items})
+        devices = len({r["label"] for r in items})
         domains = len({r["domain"] for r in items if r.get("domain")})
         lines.append(f"| {rule} | {sev} | {len(items)} | {devices} | {domains} |")
     return lines
 
 
 def _offenders(records: list[dict]) -> list[str]:
-    keys = Counter((r["client"], r["rule"], r.get("domain") or "") for r in records)
+    keys = Counter((r["label"], r["rule"], r.get("domain") or "") for r in records)
     times: dict[tuple, list[float]] = {}
     for r in records:
-        times.setdefault((r["client"], r["rule"], r.get("domain") or ""), []).append(r["time"])
+        times.setdefault((r["label"], r["rule"], r.get("domain") or ""), []).append(r["time"])
     lines = ["## Repeat offenders", "| Device | Rule | Domain | Alerts | First seen | Last seen |",
              "| --- | --- | --- | ---: | --- | --- |"]
     for key, count in keys.most_common(10):
@@ -83,7 +83,7 @@ def _high_alerts(records: list[dict]) -> list[str]:
     if not high:
         lines.append("None.")
     for r in high:
-        who = " · ".join(part for part in (r["client"], r.get("address")) if part)
+        who = " · ".join(part for part in (r["label"], join_address(r.get("ips"), r.get("mac"))) if part)
         what = " ".join(part for part in (r["rule"], r.get("domain")) if part)
         message = f" - {r['message']}" if r.get("message") else ""
         lines.append(f"- {_stamp(r['time'])} · {who} · {what}{message}")

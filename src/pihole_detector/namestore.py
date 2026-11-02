@@ -70,27 +70,15 @@ class NameStore:
 MAC = re.compile(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", re.I)
 
 
-def mac_from_address(address: str | None) -> str | None:
-    """The MAC out of an alert's "ip · mac" address field, lowercased."""
-    found = MAC.search(address or "")
-    return found.group(0).lower() if found else None
-
-
-def record_mac(record: dict) -> str | None:
-    """The MAC an alert record is about. Early alerts have no address; Pi-hole labelled such clients
-    "(ip, mac)", which still holds the MAC."""
-    return mac_from_address(record.get("address")) or mac_from_address(record.get("client"))
-
-
 def relabel(records: list[dict], lookup) -> list[dict]:
-    """Copies of alert records whose `client` is the current name for their MAC.
+    """Copies of alert records whose `label` is the current name for their MAC.
 
     Used when a report is displayed, so a name found after an alert fired still shows. The records
     on disk are never rewritten. Records with no MAC, or no better name, keep what they had.
     """
     out = []
     for record in records:
-        mac = record_mac(record)
+        mac = record.get("mac")
         name = lookup(mac) if mac else None
-        out.append({**record, "client": name} if name else record)
+        out.append({**record, "label": name} if name else record)
     return out

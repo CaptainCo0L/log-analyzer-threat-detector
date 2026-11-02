@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from pihole_detector.config import Config
 from pihole_detector.delivery import Delivery
 from pihole_detector.model import Alert
@@ -6,12 +8,25 @@ from conftest import T0, FakeTelegram
 
 
 def alert(t, severity="HIGH"):
-    return Alert(time=T0 + t, severity=severity, rule="ti_match", client="PC", domain="evil.example",
-                 message="m", evidence={}, dedup=f"ti_match|pc|{t}")
+    return Alert(time=T0 + t, severity=severity, rule="ti_match", label="PC", domain="evil.example",
+                 message="m", evidence={}, dedup=f"ti_match|pc|{t}", device="pc")
 
 
 def delivery(**cfg):
     return Delivery(Config(push_enabled=True, **cfg), State(":memory:"), FakeTelegram())
+
+
+def test_alerts_held_across_a_deploy_still_appear_in_the_summary():
+    d = delivery()
+    d.state.put("bot:held", [{"time": T0, "severity": "HIGH", "rule": "ti_match", "client": "Old PC",
+                              "domain": "evil.example", "address": "192.0.2.10"}])
+    assert d.flush(T0 + 60) and "Old PC" in d.telegram.messages[-1]
+
+
+def test_a_mute_goes_by_the_alerts_device_not_its_dedup_key():
+    d = delivery()
+    d.mute("ti_match", "pc", T0 + 3600)
+    assert d.is_muted(replace(alert(1), dedup="something|else"), T0)
 
 
 def test_push_cap_sends_one_notice_then_recovers_after_an_hour():

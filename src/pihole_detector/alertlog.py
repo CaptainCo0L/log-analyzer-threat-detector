@@ -1,7 +1,8 @@
 """alerts.jsonl: every alert, written once and read back by the digest, the bot and `report`.
 
 Every reader goes through `read`, so a line that isn't a complete alert (bad JSON, or missing time,
-severity, rule or client) is skipped the same way everywhere instead of crashing one of them.
+severity, rule or label) is skipped the same way everywhere instead of crashing one of them, and a
+line written before alerts named their device in fields (`upgrade`) reads like a new one.
 The file rolls over yearly (see yearlog.py); reads span the archives.
 """
 
@@ -12,7 +13,22 @@ from pathlib import Path
 
 from . import yearlog
 from .model import Alert
-from .namestore import record_mac
+from .namestore import MAC
+
+
+def upgrade(record: dict) -> dict:
+    """A record in today's shape. Older ones have `client` and an `address` of "ip · mac", and only
+    their dedup key names the device. Early ones have no address: Pi-hole labelled such clients
+    "(ip, mac)", which still holds the MAC."""
+    if "label" in record:
+        return record
+    old = dict(record)
+    label, address = old.pop("client"), old.pop("address", None) or ""
+    found = MAC.search(address) or MAC.search(str(label))
+    mac = found.group(0).lower() if found else ""
+    ips = [part for part in address.split(" · ") if part and not MAC.fullmatch(part)]
+    key = str(old.get("dedup") or "").split("|")
+    return {**old, "label": label, "mac": mac, "ips": ips, "device": key[1] if len(key) > 1 else mac}
 
 
 class AlertLog:
@@ -37,12 +53,12 @@ class AlertLog:
                     if not line.strip():
                         continue
                     try:
-                        record = json.loads(line)
+                        record = upgrade(json.loads(line))
                         when = float(record["time"])
-                        record["severity"], record["rule"], record["client"]
+                        record["severity"], record["rule"]
                     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                         skipped += 1
                         continue
-                    if start <= when <= end and (mac is None or record_mac(record) == mac):
+                    if start <= when <= end and (mac is None or record["mac"] == mac):
                         records.append(record)
         return records, skipped

@@ -12,7 +12,7 @@ import urllib.request
 import uuid
 from collections import Counter
 
-from .model import HIGH, LOW, MEDIUM, Alert
+from .model import HIGH, LOW, MEDIUM, Alert, join_address
 
 log = logging.getLogger(__name__)
 TELEGRAM_LIMIT = 4000
@@ -78,8 +78,8 @@ def format_push(alert: Alert, hint: bool = True) -> str:
     """The pushed alert. `hint=False` drops the "run on the NAS" block command, for when buttons carry it."""
     title, meaning = RULES.get(alert.rule, (alert.rule, ""))
     lines = [f"{SEVERITY_ICON.get(alert.severity, '⚪')} <b>{esc(title)}</b>", ""]
-    device = f"📱 <b>{esc(alert.client)}</b>"
-    extra = [part for part in alert.address.split(" · ") if part and part != alert.client]
+    device = f"📱 <b>{esc(alert.label)}</b>"
+    extra = [part for part in (*alert.ips, alert.mac) if part and part != alert.label]
     if extra:
         device += f"  <i>{esc(' · '.join(extra))}</i>"
     lines.append(device)
@@ -98,13 +98,13 @@ def format_push(alert: Alert, hint: bool = True) -> str:
 
 
 def _digest_item(r: dict) -> str:
-    who = esc(r.get("client", "?"))
+    who = esc(r.get("label", "?"))
     rule = r["rule"]
     ev = r.get("evidence") or {}
     if rule == "device_silent":
         return f"• {who} - silent {ev.get('hours', '?')} h"
     if rule == "new_device":
-        return f"• {who} <i>{esc(r.get('address', ''))}</i>"
+        return f"• {who} <i>{esc(join_address(r.get('ips'), r.get('mac')))}</i>"
     if rule == "beaconing":
         return f"• {who} → <code>{esc(r.get('domain'))}</code> every ~{ev.get('interval_s') or 0:.0f} s"
     if rule == "nxdomain_burst":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..baseline import NEW
 from ..model import HIGH, LOW, MEDIUM, Alert, Device, Query
+from ..namestore import MAC
 from . import BLOCKED_STATUSES, Context, QueryRule, Seen, block_hint, make_alert
 
 
@@ -47,8 +48,8 @@ def new_devices(devices: list[Device], ctx: Context, now: float, quiet: bool,
         if rotation:
             old_mac, name = rotation
             alerts.append(Alert(
-                time=now, severity=LOW, rule="new_device", client=name, domain="",
-                address=" · ".join(list(dev.ips[:2]) + [dev.hwaddr]),
+                time=now, severity=LOW, rule="new_device", label=name, domain="",
+                device=ctx.state.device_of(old_mac), mac=dev.hwaddr, ips=dev.ips[:2],
                 message=f"{name} rejoined on a new private Wi-Fi MAC {dev.hwaddr} (was {old_mac})",
                 evidence={"hwaddr": dev.hwaddr, "vendor": dev.vendor, "ips": list(dev.ips),
                           "first_seen": dev.first_seen, "previous_mac": old_mac},
@@ -57,8 +58,8 @@ def new_devices(devices: list[Device], ctx: Context, now: float, quiet: bool,
             continue
         label = dev.name or dev.vendor or (dev.ips[0] if dev.ips else dev.hwaddr)
         alerts.append(Alert(
-            time=now, severity=HIGH, rule="new_device", client=label, domain="",
-            address=" · ".join(list(dev.ips[:2]) + [dev.hwaddr]),
+            time=now, severity=HIGH, rule="new_device", label=label, domain="",
+            device=dev.hwaddr, mac=dev.hwaddr, ips=dev.ips[:2],
             message=f"New device on the LAN: {dev.hwaddr} {dev.vendor or 'unknown vendor'}, "
                     f"IPs {', '.join(dev.ips) or 'none'} (may be a rotated private Wi-Fi MAC)",
             evidence={"hwaddr": dev.hwaddr, "vendor": dev.vendor, "ips": list(dev.ips),
@@ -74,12 +75,13 @@ def silent_devices(ctx: Context, now: float, labels: dict[str, str]) -> list[Ale
     for ident, last_seen in ctx.state.silent_clients(now - cfg.silent_hours * 3600, cfg.silent_min_queries):
         ctx.state.mark_silent(ident)
         hours = (now - last_seen) / 3600
+        known_by_mac = bool(MAC.fullmatch(ident))
         alerts.append(Alert(
-            time=now, severity=LOW, rule="device_silent", client=labels.get(ident, ident), domain="",
+            time=now, severity=LOW, rule="device_silent", label=labels.get(ident, ident), domain="",
             message=f"{labels.get(ident, ident)} has sent no DNS to Pi-hole for {hours:.0f} h "
                     "(offline, or bypassing Pi-hole)",
             evidence={"last_seen": last_seen, "hours": round(hours)},
             dedup=f"device_silent|{ident}",
-            address=ident,
+            device=ident, mac=ident if known_by_mac else "", ips=() if known_by_mac else (ident,),
         ))
     return alerts

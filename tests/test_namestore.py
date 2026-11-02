@@ -73,32 +73,19 @@ def test_best_probe_follows_the_source_order_and_skips_nothing_found():
 
 # --- relabelling records for display ------------------------------------------------------------
 
-from pihole_detector.namestore import mac_from_address, relabel
-
-
-def test_mac_is_read_from_the_address_field():
-    assert mac_from_address("192.0.2.10 · 02:00:00:00:00:0A") == "02:00:00:00:00:0a"
-    assert mac_from_address("192.0.2.10") is None
-    assert mac_from_address("") is None
+from pihole_detector.namestore import relabel
 
 
 def test_relabel_replaces_the_stored_name_without_touching_the_original_records():
-    records = [{"client": "(192.0.2.10, 02:00:00:00:00:0a)", "address": f"192.0.2.10 · {A}", "rule": "x"}]
+    records = [{"label": "(192.0.2.10, 02:00:00:00:00:0a)", "mac": A, "ips": ["192.0.2.10"], "rule": "x"}]
     out = relabel(records, {A: "Aswins-iPad"}.get)
-    assert out[0]["client"] == "Aswins-iPad" and out[0]["rule"] == "x"
-    assert records[0]["client"] == "(192.0.2.10, 02:00:00:00:00:0a)"
+    assert out[0]["label"] == "Aswins-iPad" and out[0]["rule"] == "x"
+    assert records[0]["label"] == "(192.0.2.10, 02:00:00:00:00:0a)"
 
 
 def test_relabel_keeps_the_stored_name_when_there_is_no_mac_or_no_better_name():
-    records = [{"client": "192.0.2.10", "address": "192.0.2.10"}, {"client": "old", "address": f"1.1.1.1 · {B}"}]
-    assert [r["client"] for r in relabel(records, {A: "x"}.get)] == ["192.0.2.10", "old"]
-
-
-def test_relabel_falls_back_to_the_mac_inside_an_old_style_label():
-    # Early alerts have no address field; Pi-hole's own label for the client was "(ip, mac)".
-    records = [{"client": f"(192.0.2.10, {A})", "address": None}, {"client": f"(192.0.2.11, {B})"}]
-    out = relabel(records, {A: "Sony TV", B: "Fridge"}.get)
-    assert [r["client"] for r in out] == ["Sony TV", "Fridge"]
+    records = [{"label": "192.0.2.10", "mac": ""}, {"label": "old", "mac": B}]
+    assert [r["label"] for r in relabel(records, {A: "x"}.get)] == ["192.0.2.10", "old"]
 
 
 def test_nmap_is_the_least_trusted_probe():

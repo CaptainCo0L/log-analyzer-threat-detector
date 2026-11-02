@@ -293,7 +293,7 @@ def test_new_private_mac_answering_with_a_known_name_is_a_rotation(make_detector
     assert calls == [["192.0.2.31"]]  # IPv4 only, just this device
     a = alerts[0]
     assert a.rule == "new_device" and a.severity == "LOW" and det.telegram.messages == []
-    assert a.client == "aswins-ipad" and a.evidence["previous_mac"] == IPAD_OLD
+    assert a.label == "aswins-ipad" and a.evidence["previous_mac"] == IPAD_OLD
     assert "new private Wi-Fi MAC" in a.message
     assert det.directory.names.name(IPAD_NEW) == "aswins-ipad"  # saved, so later alerts carry the name
 
@@ -417,6 +417,6 @@ def test_label_uses_pihole_client_comment(make_detector):
     det = make_detector()
     det.intel.names = {PC_MAC: "AswinPC"}
     a = det.process_query(q("evil-c2.example"))[0]
-    assert a.client == "AswinPC" and a.address == f"{PC_IP} · {PC_MAC}"
+    assert a.label == "AswinPC" and a.address == f"{PC_IP} · {PC_MAC}"
     unnamed = det.process_query(q("evil-c2.example", ip="192.0.2.77"))[0]
-    assert unnamed.client == "192.0.2.77"
+    assert unnamed.label == "192.0.2.77"

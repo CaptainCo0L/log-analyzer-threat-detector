@@ -185,7 +185,7 @@ def test_no_block_button_unless_the_target_is_a_plain_domain():
     from pihole_detector.state import State
     for command in ("sudo docker exec pihole pihole --wild *", "sudo docker exec pihole pihole --wild a;b",
                     "sudo docker exec pihole pihole --wild localhost"):
-        alert = Alert(time=T0, severity="HIGH", rule="ti_match", client="c", domain="d", message="m",
+        alert = Alert(time=T0, severity="HIGH", rule="ti_match", label="c", domain="d", message="m",
                       evidence={"block": command}, dedup="ti_match|c|d")
         labels = [b["text"] for row in alert_buttons(State(), alert, T0) for b in row]
         assert not any("Block" in label and "Copy" not in label for label in labels), command

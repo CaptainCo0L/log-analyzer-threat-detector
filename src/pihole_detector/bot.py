@@ -508,7 +508,7 @@ class Bot:
         else:
             lines.append("   ".join(f"{SEVERITY_ICON[s]} {by_sev[s]} {s.lower()}" for s in (HIGH, MEDIUM, LOW)))
             by_rule = Counter(r["rule"] for r in records)
-            repeats = Counter((r.get("client", "?"), r["rule"], r.get("domain") or "") for r in records)
+            repeats = Counter((r.get("label", "?"), r["rule"], r.get("domain") or "") for r in records)
             detail = [f"<b>{esc(RULES.get(rule, (rule, ''))[0])}</b>: {count}" for rule, count in by_rule.most_common()]
             detail += ["", "<b>Most repeated</b>"]
             detail += [f"{n}× {esc(who)} · {esc(rule)}" + (f" · <code>{esc(dom)}</code>" if dom else "")

@@ -146,9 +146,9 @@ def test_status_reports_pihole_unreachable(make_detector):
 
 # --- /report --------------------------------------------------------------------------------
 
-def alert(t, severity="HIGH", rule="ti_match", client="AswinPC", domain="evil-c2.example"):
-    return Alert(time=t, severity=severity, rule=rule, client=client, domain=domain, message="m",
-                 address=f"{PC_IP} · {PC_MAC}", dedup=f"{rule}|{t}")
+def alert(t, severity="HIGH", rule="ti_match", label="AswinPC", domain="evil-c2.example"):
+    return Alert(time=t, severity=severity, rule=rule, label=label, domain=domain, message="m",
+                 device=PC_MAC, mac=PC_MAC, ips=(PC_IP,), dedup=f"{rule}|{t}")
 
 
 def test_report_summarises_and_offers_the_full_report(make_detector):
@@ -181,7 +181,7 @@ def test_report_days_are_bounded_and_default_to_seven(make_detector):
 def test_a_huge_report_still_fits_one_message(make_detector):
     bot, det, _ = make_bot(make_detector)
     for i in range(400):
-        det.alert_log.write(alert(T0 - i * 60, domain=f"d{i}-{'x' * 40}.example", client=f"device-{i}"))
+        det.alert_log.write(alert(T0 - i * 60, domain=f"d{i}-{'x' * 40}.example", label=f"device-{i}"))
     bot.handle(message("/report 1"), T0)
     assert len(replies(det)[0]) <= 4096
 

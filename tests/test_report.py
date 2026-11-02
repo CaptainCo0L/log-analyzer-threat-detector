@@ -12,8 +12,8 @@ END = START + 7 * 86400
 
 
 def rec(severity, rule, t, client="AswinPC", domain="x.example", **extra):
-    return {"time": T0 + t, "severity": severity, "rule": rule, "client": client, "domain": domain,
-            "address": "", "message": "", "evidence": {}, **extra}
+    return {"time": T0 + t, "severity": severity, "rule": rule, "label": client, "domain": domain,
+            **{"mac": "", "ips": [], "message": "", "evidence": {}, **extra}}
 
 
 def report(records, **kw):
@@ -67,9 +67,9 @@ def test_repeat_offenders_are_top_ten_with_first_and_last_seen():
 
 def test_high_alerts_listed_in_full_with_address_but_medium_is_not():
     out = report([
-        rec("HIGH", "ti_match", 100, client="Pixel", domain="evil.example", address="192.0.2.30 · 02:00:00:00:00:30",
+        rec("HIGH", "ti_match", 100, client="Pixel", domain="evil.example", mac="02:00:00:00:00:30", ips=["192.0.2.30"],
             message="on a threat list"),
-        rec("MEDIUM", "beaconing", 200, client="TV", domain="tick.example", address="192.0.2.40 · 02:00:00:00:00:40"),
+        rec("MEDIUM", "beaconing", 200, client="TV", domain="tick.example", mac="02:00:00:00:00:40", ips=["192.0.2.40"]),
     ])
     high = section(out, "HIGH alerts")
     assert "Pixel" in high and "192.0.2.30 · 02:00:00:00:00:30" in high
