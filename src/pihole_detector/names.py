@@ -15,7 +15,11 @@ def name_key(text: str | None) -> str:
 
 
 def same_name(a: str | None, b: str | None) -> bool:
-    """Do two names mean the same device? Every "same device" check compares names this way."""
+    """Are these the same name, ignoring case and punctuation?
+
+    Matching names are only evidence (rotation sync, previous_mac). Two MACs are one device when
+    device_alias links them (ADR 0003), never because their names match.
+    """
     return bool(name_key(a)) and name_key(a) == name_key(b)
 
 

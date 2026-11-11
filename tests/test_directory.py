@@ -56,3 +56,23 @@ def test_a_query_is_labelled_in_the_same_order_as_a_device(tmp_path):
     assert d.query_label(MAC, IP, None) == "LG device"
     assert d.query_label(MAC, IP, IP) == "LG device"     # Pi-hole shows the IP when it has no hostname
     assert d.query_label(None, IP, None) == IP
+
+
+# --- find: one Found per Device (ADR 0003), never by label --------------------------------------
+
+def test_find_never_makes_two_devices_one_because_their_labels_match(tmp_path):
+    a = Device(hwaddr=MAC, ips=(IP,), first_seen=T0, vendor="Apple", last_query=T0)
+    b = Device(hwaddr=OLD, ips=("192.0.2.41",), first_seen=T0, vendor="Apple", last_query=T0 - 5)
+    found = directory(tmp_path).find("apple", [a, b])
+    assert [f.macs for f in found] == [(a,), (b,)]
+
+
+def test_find_makes_a_devices_linked_macs_one_whatever_they_are_called(tmp_path):
+    new = Device(hwaddr=MAC, ips=(IP,), first_seen=T0, vendor="Apple", last_query=T0)
+    old = Device(hwaddr=OLD, ips=("192.0.2.41",), first_seen=T0 - 9, last_query=T0 - 60)
+    other = Device(hwaddr="02:00:00:00:00:42", ips=("192.0.2.42",), first_seen=T0, last_query=T0)
+    store = NameStore(tmp_path / "names.json")
+    d = Directory(lambda: {OLD: "Kitchen iPad"}, store, device_of=lambda m: OLD if m == MAC else m)
+    (found,) = d.find("kitchen", [new, old, other])   # only the old MAC carries the name
+    assert found.device == OLD and found.macs == (new, old) and found.current == new
+    assert found.label == "Kitchen iPad"               # a chosen name beats the new MAC's vendor guess

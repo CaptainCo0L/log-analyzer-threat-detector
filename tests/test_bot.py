@@ -296,6 +296,7 @@ def ipad_bot(make_detector, extra=()):
                Device(hwaddr=IPAD_B, ips=("192.0.2.87",), first_seen=T0 - DAY, last_query=T0 - 30), *extra]
     bot, det, api = make_bot(make_detector, api=FakePihole(devices=devices))
     det.intel.names[IPAD_A] = det.intel.names[IPAD_B] = "Aswins-iPad"
+    det.state.link_device(IPAD_B, IPAD_A)  # discovery heard the new MAC answer with the saved name
     return bot, det
 
 
@@ -342,3 +343,23 @@ def test_an_exact_name_beats_a_partial_one(make_detector):
     det.intel.names[other.hwaddr] = "Aswins-iPad mini"
     bot.handle(message("/whois aswins ipad"), T0)
     assert f"MAC <code>{IPAD_B}</code>" in replies(det)[0]
+
+
+def test_whois_shows_a_linked_device_as_one_whatever_its_macs_are_called(make_detector):
+    new = Device(hwaddr="06:00:00:00:00:77", ips=("192.0.2.77",), first_seen=T0, last_query=T0 - 5, vendor="Apple")
+    bot, det, api = make_bot(make_detector)
+    api.devices_.append(new)
+    det.state.link_device(new.hwaddr, PC_MAC)
+    bot.handle(message("/whois aswinpc"), T0)
+    text = replies(det)[0]
+    assert "AswinPC" in text and f"MAC <code>{new.hwaddr}</code>" in text   # the MAC in use, under its chosen name
+    assert "Also seen as" in text and PC_MAC in text and "Several" not in text
+
+
+def test_whois_lists_one_line_per_device_when_several_match(make_detector):
+    other = Device(hwaddr="0a:00:00:00:00:99", ips=("192.0.2.99",), first_seen=T0, last_query=T0)
+    bot, det = ipad_bot(make_detector, extra=[other])
+    det.intel.names[other.hwaddr] = "Dads iPad"
+    bot.handle(message("/whois ipad"), T0)
+    text = replies(det)[0]
+    assert text.count("• ") == 2 and IPAD_B in text and IPAD_A not in text

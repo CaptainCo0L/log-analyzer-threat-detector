@@ -16,6 +16,7 @@ from collections import Counter
 
 from .cards import BLOCK_STATUS, MUTE_STATUS, set_rich_status, set_status, swap_row
 from .changes import Change, list_exact, list_wild, rename, set_blocking, set_group
+from .directory import Found
 from .domains import apex
 from .names import ipv4_of
 from .report import build_report
@@ -364,18 +365,23 @@ class Bot:
     def cmd_resume(self, args, now) -> None:
         self._change("/resume", Change([set_blocking(True)]), "▶️ Blocking is on again.", now)
 
-    def _targets(self, query: str) -> tuple[list, str | None]:
-        """The device(s) a /name or /group means: one device, or one device on several MACs."""
+    def _find(self, query: str) -> tuple[Found | None, str | None]:
+        """The one Device the owner means, or the reply saying why there isn't one."""
         devices, problem = self._devices()
         if problem:
-            return [], problem
+            return None, problem
         found = self.det.directory.find(query, devices)
         if not found:
-            return [], f"No device matches <code>{esc(query)}</code>. Try /devices all."
-        if len(found) > 1 and not self.det.directory.one_device(found):
-            listed = "\n".join(f"• {esc(self._name(d))} - <code>{d.hwaddr}</code>" for d in found[:15])
-            return [], f"Several devices match:\n{listed}\n\nAsk again with the MAC."
-        return found, None
+            return None, f"No device matches <code>{esc(query)}</code>. Try /devices all."
+        if len(found) > 1:
+            listed = "\n".join(f"• {esc(f.label)} - <code>{f.current.hwaddr}</code>" for f in found[:15])
+            return None, f"Several devices match:\n{listed}\n\nAsk again with the MAC."
+        return found[0], None
+
+    def _targets(self, query: str) -> tuple[list, str | None]:
+        """Every MAC of the device a /name or /group means."""
+        found, problem = self._find(query)
+        return (list(found.macs), None) if found else ([], problem)
 
     def cmd_name(self, args, now) -> None:
         if len(args) < 2:
@@ -641,26 +647,12 @@ class Bot:
         if not args:
             self.reply("Usage: /whois <name, IP or MAC>, e.g. /whois Aswins-iPad")
             return
-        devices, problem = self._devices()
-        if problem:
-            self.reply(problem)
-            return
-        found = self.det.directory.find(" ".join(args), devices)
-        if not found:
-            self.reply(f"No device matches <code>{esc(' '.join(args))}</code>. Try /devices all.")
-            return
-        found.sort(key=lambda d: -d.last_query)
-        if len(found) > 1 and self.det.directory.one_device(found):
-            # One device on several private MACs: show the one in use, mention the others.
-            self.reply(self._whois(found[0], now, others=found[1:]))
-            return
-        if len(found) > 1:
-            listed = "\n".join(f"• {esc(self._name(d))} - <code>{d.hwaddr}</code>" for d in found[:15])
-            self.reply(f"Several devices match:\n{listed}\n\nAsk again with the MAC.")
-            return
-        self.reply(self._whois(found[0], now))
+        found, problem = self._find(" ".join(args))
+        self.reply(self._whois(found, now) if found else problem or "")
 
-    def _whois(self, dev, now: float, others=()) -> str:
+    def _whois(self, found: Found, now: float) -> str:
+        """The MAC the device uses now, under the device's label, with its other MACs folded."""
+        dev, others = found.current, found.macs[1:]
         mac = dev.hwaddr
         ip = ipv4_of(dev)
         source = self.det.directory.source(dev)
@@ -668,8 +660,8 @@ class Bot:
         member = ", ".join(names.get(g, str(g)) for g in groups.get(mac, ())) or "no Clients entry"
         facts = [f"Last lookup {ago(now - dev.last_query)} ago" if dev.last_query else "No lookups yet",
                  f"Groups: {esc(member)}"]
-        device_of, device = self.det.state.device_of, self.det.state.device_of(mac)
-        recent = [r for r in self.det.alert_log.read(now - 30 * 86400, now) if device_of(r["device"]) == device]
+        device_of = self.det.directory.device_of
+        recent = [r for r in self.det.alert_log.read(now - 30 * 86400, now) if device_of(r["device"]) == found.device]
         recent.sort(key=lambda r: -r.get("time", 0))
         facts += ["", "<b>Recent alerts</b>"]
         facts += [f"{SEVERITY_ICON.get(r['severity'], '⚪')} {esc(when(r['time']))} · {esc(r['rule'])}"
@@ -690,4 +682,4 @@ class Bot:
                 details += [f"{i}. <code>{esc(d)}</code> - {n:,}" for i, (d, n) in enumerate(top, 1)] or ["none"]
             except Exception:
                 log.exception("telegram: reading queries for %s failed", ip)
-        return layout("🔎", esc(self._name(dev)), facts, "/name renames it, and /group changes its groups.", details)
+        return layout("🔎", esc(found.label), facts, "/name renames it, and /group changes its groups.", details)

@@ -8,17 +8,34 @@ bot reply asks this module, so the order lives in one place.
 from __future__ import annotations
 
 import ipaddress
+from dataclasses import dataclass
+from typing import Callable
 
-from .model import MAC
+from .model import MAC, Device
 from .names import comment_for, ipv4_of, name_key
 from .namestore import NameStore, relabel
 from .rotation import TRUSTED, device_macs
 
 
+@dataclass(frozen=True)
+class Found:
+    """One Device that matched what the owner typed, with every MAC of it Pi-hole lists."""
+
+    device: str                 # its identity, state.device_of
+    macs: tuple[Device, ...]    # newest lookup first
+    label: str
+
+    @property
+    def current(self) -> Device:
+        """The MAC it last looked something up from."""
+        return self.macs[0]
+
+
 class Directory:
-    def __init__(self, comments, names: NameStore):
+    def __init__(self, comments, names: NameStore, device_of: Callable[[str], str] = lambda mac: mac):
         self._comments = comments  # () -> {MAC or IP: Clients comment}, re-read with the intel
         self.names = names
+        self.device_of = device_of  # MAC -> the device's identity (state.device_of)
         self.ip_to_mac: dict[str, str] = {}
         self._vendors: dict[str, str | None] = {}
 
@@ -70,8 +87,27 @@ class Directory:
         """Alert records with the current name for their MAC (see namestore.relabel)."""
         return relabel(records, self.name)
 
-    def find(self, query: str, devices) -> list:
-        """Devices matching a MAC, an IP, or any name they go by, whole or in part."""
+    def find(self, query: str, devices: list[Device]) -> list[Found]:
+        """The Devices with a MAC matching a MAC, an IP, or any name it goes by, whole or in part.
+
+        Each comes with every MAC of it in `devices`, matched or not, newest lookup first. MACs are one
+        device only when device_alias links them (ADR 0003): two devices both called "Apple device" stay two.
+        """
+        matched = self._matches(query, devices)
+        by_device: dict[str, list[Device]] = {}
+        for dev in sorted(devices, key=lambda d: -d.last_query):
+            by_device.setdefault(self.device_of(dev.hwaddr), []).append(dev)
+        wanted = {self.device_of(d.hwaddr) for d in matched}
+        found = [Found(ident, tuple(macs), self._device_label(macs))
+                 for ident, macs in by_device.items() if ident in wanted]
+        return sorted(found, key=lambda f: -f.current.last_query)
+
+    def _device_label(self, macs: list[Device]) -> str:
+        """A chosen name (comment or saved) from any of its MACs, newest first; else the newest MAC's label."""
+        chosen = next((dev for dev in macs if self.name(dev.hwaddr, ipv4_of(dev))), macs[0])
+        return self.label(chosen)
+
+    def _matches(self, query: str, devices: list[Device]) -> list[Device]:
         q = query.strip().lower()
         if MAC.fullmatch(q):
             return [d for d in devices if d.hwaddr == q]
@@ -86,10 +122,6 @@ class Directory:
         known = {d.hwaddr: self._name_keys(d) for d in devices}
         exact = [d for d in devices if key in known[d.hwaddr]]
         return exact or [d for d in devices if any(key in name for name in known[d.hwaddr])]
-
-    def one_device(self, found) -> bool:
-        """Do these matches all go by the same name (one device on several private MACs)?"""
-        return len({name_key(self.label(d)) for d in found}) == 1
 
     def _name_keys(self, dev) -> set[str]:
         saved = self.names.entries.get(dev.hwaddr) or {}

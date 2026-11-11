@@ -25,6 +25,8 @@ belong in the tests' update instead.
 
 Naming a device, matching two names (`names.same_name`) and finding a device from what the owner typed
 all go through `directory.Directory` and `names`. A new feature that needs a device's name asks there.
+`Directory.find` returns one `Found` per device, with all its MACs. Two MACs are one device only when
+`device_alias` links them, never because their labels match: two unnamed devices are both "Apple device".
 
 Per-device state is keyed on the device's identity (`state.device_of`, `Seen.ident`), never a raw MAC, so it
 survives a rotation (ADR 0003). The exception is anything Pi-hole lists by MAC, such as its groups:

@@ -160,6 +160,15 @@ def test_name_creates_an_entry_in_default_for_a_device_without_one(make_detector
     assert api.calls[-1] == ("delete_client", IOT_MAC)
 
 
+def test_name_and_group_never_change_two_devices_that_only_share_a_label(make_detector, tmp_path):
+    bot, det, api = setup(make_detector, tmp_path)
+    api.devices_ = [Device(hwaddr=f"0a:00:00:00:00:0{i}", ips=(f"192.0.2.5{i}",), first_seen=T0, last_query=T0,
+                           vendor="Apple") for i in (1, 2)]
+    bot.handle(message("/name apple Kitchen"), T0)
+    bot.handle(message("/group apple IoT"), T0)
+    assert api.calls == [] and all("Several devices match" in m for m in det.telegram.messages)
+
+
 def test_name_needs_a_device_and_a_name(make_detector, tmp_path):
     bot, det, api = setup(make_detector, tmp_path)
     bot.handle(message("/name aswinpc"), T0)
