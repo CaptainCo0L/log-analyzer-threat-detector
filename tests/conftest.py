@@ -127,6 +127,13 @@ class FakePihole:
         self.logged_out = True
 
 
+def press(data, chat=42, sender=42, update_id=2, message_date=T0) -> dict:
+    """A Telegram update for pressing the inline button whose callback_data is `data`."""
+    return {"update_id": update_id, "callback_query": {
+        "id": "cb1", "from": {"id": sender}, "data": data,
+        "message": {"message_id": 55, "date": int(message_date), "chat": {"id": chat, "type": "private"}}}}
+
+
 def q(domain, t=0.0, ip=PC_IP, reply="IP", status="FORWARDED", qtype="A", **kw) -> Query:
     return Query(id=0, time=T0 + t, domain=domain, type=qtype, status=status, reply=reply,
                  client_ip=ip, client_name=kw.pop("name", None), **kw)
