@@ -22,8 +22,8 @@ from .names import ipv4_of
 from .report import build_report
 from .actions import TOASTS
 from .delivery import APEX, MAX_MUTE, QUIET, in_quiet
-from .sinks import (SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, fold, layout, para, push_heading, rich, rule_title,
-                    severity_line, table, when)
+from .sinks import (SEVERITY_ICON, TELEGRAM_LIMIT, StatusFacts, ago, esc, fit, format_status, layout, push_heading,
+                    rich_status, rule_title, severity_line, when)
 from .source import ApiError, PiholeClient
 from .model import HIGH, LOW, MEDIUM, Alert, is_private
 
@@ -63,17 +63,6 @@ SEE_STATUS = "/status shows whether Pi-hole is up."
 
 def _display_setting(value):
     return ", ".join(value) if isinstance(value, tuple) else value
-
-
-def ago(seconds: float) -> str:
-    seconds = max(seconds, 0)
-    if seconds < 90:
-        return f"{seconds:.0f} s"
-    if seconds < 3600:
-        return f"{seconds / 60:.0f} min"
-    if seconds < 2 * 86400:
-        return f"{seconds / 3600:.0f} h"
-    return f"{seconds / 86400:.0f} d"
 
 
 class TelegramPoller(threading.Thread):
@@ -509,56 +498,20 @@ class Bot:
     # /status --------------------------------------------------------------------------------
     def cmd_status(self, args, now) -> None:
         cfg, stats = self.det.cfg, self.det.stats
-        actions = []
         try:
-            blocking = self.api.get("/dns/blocking")
+            blocking, error = self.api.get("/dns/blocking"), ""
         except Exception as exc:
-            icon, summary, pihole = "🚨", "Pi-hole is not reachable", f"Pi-hole: {esc(type(exc).__name__)}"
-            health = "Not reachable"
-        else:
-            value = esc(blocking.get("blocking"))
-            timer = f", back on in {ago(blocking['timer'])}" if blocking.get("timer") else ""
-            pihole = f"Blocking: {value}"
-            if value == "enabled":
-                icon, summary, health = "✅", "Pi-hole is up and blocking", "Up and blocking"
-            else:
-                icon, summary, health = "⚠️", f"blocking is {value}{timer}", f"Blocking {value}"
-                actions.append("/resume turns it back on.")
-        counts = {s: stats.get(f"alert_{s}", 0) for s in (HIGH, MEDIUM, LOW)}
-        facts = [severity_line(counts, zeros=True)]
-        if stats.get("api_failures"):
-            facts.append(f"⚠️ {stats['api_failures']} failed polls since the last digest")
-        mute_until, quiet = self.delivery.mute_until, self.delivery.quiet
-        if mute_until > now or quiet:
-            parts = [f"Held until {esc(when(mute_until))}"] if mute_until > now else []
-            parts += [f"Quiet {esc(quiet)}" + (" (now)" if in_quiet(quiet, now) else "")] if quiet else []
-            held = self.delivery.held
-            facts.append("🔕 " + " · ".join(parts) + (f" · {held} held" if held else ""))
-        if mute_until > now:
-            actions.append("/unmute ends the hold early.")
-        last = self.det.state.get("last_digest")
-        details = [
-            pihole,
-            f"Detector up {ago(now - self.started)} · {stats.get('queries', 0):,} lookups checked "
-            f"since {esc(when(last)) if last else 'start'}",
-            f"Instant alerts {'on' if cfg.push_enabled else 'off'} · next digest {esc(when(self.det.next_digest(now)))}",
-            f"Rotation sync {'on' if cfg.rotation_sync else 'off'} · nmap {'on' if cfg.nmap_enabled else 'off'}",
-        ]
-        action = "\n".join(actions)
-        calm = icon == "✅" and not stats.get("api_failures")
-        shown = ", ".join(f"{counts[s]} {s.lower()}" for s in (HIGH, MEDIUM, LOW) if counts[s])
-        heading = "🟢 All good" if calm else f"{'⚠️' if icon == '✅' else icon} {summary[0].upper()}{summary[1:]}"
-        page = rich(heading,
-                    table([("Pi-hole", health), ("Alerts", shown or "None"),
-                           ("Next digest", when(self.det.next_digest(now)))]),
-                    *(para(fact) for fact in facts[1:]), *(para(esc(line)) for line in actions),
-                    fold("More", table([
-                        ("Detector", f"Up {ago(now - self.started)}"),
-                        (f"Lookups since {when(last) if last else 'start'}", f"{stats.get('queries', 0):,}"),
-                        ("Instant alerts", "On" if cfg.push_enabled else "Off"),
-                        ("Rotation sync", "On" if cfg.rotation_sync else "Off"),
-                        ("nmap", "On" if cfg.nmap_enabled else "Off")])))
-        self.delivery.send_rich(page, layout(icon, f"Status: {summary}", facts, action, details), links=True)
+            blocking, error = None, type(exc).__name__
+        quiet = self.delivery.quiet
+        facts = StatusFacts(
+            now=now, started=self.started, blocking=blocking, error=error,
+            counts={s: stats.get(f"alert_{s}", 0) for s in (HIGH, MEDIUM, LOW)},
+            api_failures=stats.get("api_failures", 0), queries=stats.get("queries", 0),
+            last_digest=self.det.state.get("last_digest"), next_digest=self.det.next_digest(now),
+            mute_until=self.delivery.mute_until, quiet=quiet, quiet_now=in_quiet(quiet, now),
+            held=self.delivery.held, push_enabled=cfg.push_enabled, rotation_sync=cfg.rotation_sync,
+            nmap_enabled=cfg.nmap_enabled)
+        self.delivery.send_rich(rich_status(facts), format_status(facts), links=True)
 
     # /report --------------------------------------------------------------------------------
     def _records(self, days: float, now: float) -> list[dict]:

@@ -6,6 +6,7 @@ import html
 import re
 import time
 from collections import Counter
+from dataclasses import dataclass
 
 from .model import HIGH, LOW, MEDIUM, Alert, join_address
 
@@ -288,6 +289,83 @@ def rich_digest(records: list[dict], stats: dict, start: float, end: float) -> s
                 else table(_digest_rows(low)[:DIGEST_ROWS]) if low else "")
 
 
+@dataclass(frozen=True)
+class StatusFacts:
+    """What /status reports, gathered once so its rich message and text twin say the same things."""
+
+    now: float
+    started: float                  # when the detector started
+    blocking: dict | None           # Pi-hole's /dns/blocking; None when it couldn't be asked
+    error: str                      # then, why: the exception's type
+    counts: dict                    # alerts since the last digest, by severity
+    api_failures: int
+    queries: int
+    last_digest: float | None
+    next_digest: float
+    mute_until: float               # the /mute hold, 0 for none
+    quiet: str | None               # quiet hours "HH:MM-HH:MM"
+    quiet_now: bool
+    held: int                       # pushes waiting for the hold or quiet hours to end
+    push_enabled: bool
+    rotation_sync: bool
+    nmap_enabled: bool
+
+
+def _status(f: StatusFacts) -> tuple[str, str, str, str, list[str], list[str]]:
+    """(icon, summary, Pi-hole line, Pi-hole health, facts, actions): what both forms of /status say."""
+    actions = []
+    if f.blocking is None:
+        icon, summary, pihole, health = "🚨", "Pi-hole is not reachable", f"Pi-hole: {esc(f.error)}", "Not reachable"
+    else:
+        value = esc(f.blocking.get("blocking"))
+        timer = f", back on in {ago(f.blocking['timer'])}" if f.blocking.get("timer") else ""
+        pihole = f"Blocking: {value}"
+        if value == "enabled":
+            icon, summary, health = "✅", "Pi-hole is up and blocking", "Up and blocking"
+        else:
+            icon, summary, health = "⚠️", f"blocking is {value}{timer}", f"Blocking {value}"
+            actions.append("/resume turns it back on.")
+    facts = [severity_line(f.counts, zeros=True)]
+    if f.api_failures:
+        facts.append(f"⚠️ {f.api_failures} failed polls since the last digest")
+    if f.mute_until > f.now or f.quiet:
+        parts = [f"Held until {esc(when(f.mute_until))}"] if f.mute_until > f.now else []
+        parts += [f"Quiet {esc(f.quiet)}" + (" (now)" if f.quiet_now else "")] if f.quiet else []
+        facts.append("🔕 " + " · ".join(parts) + (f" · {f.held} held" if f.held else ""))
+    if f.mute_until > f.now:
+        actions.append("/unmute ends the hold early.")
+    return icon, summary, pihole, health, facts, actions
+
+
+def format_status(f: StatusFacts) -> str:
+    icon, summary, pihole, _, facts, actions = _status(f)
+    since = esc(when(f.last_digest)) if f.last_digest else "start"
+    details = [
+        pihole,
+        f"Detector up {ago(f.now - f.started)} · {f.queries:,} lookups checked since {since}",
+        f"Instant alerts {'on' if f.push_enabled else 'off'} · next digest {esc(when(f.next_digest))}",
+        f"Rotation sync {'on' if f.rotation_sync else 'off'} · nmap {'on' if f.nmap_enabled else 'off'}",
+    ]
+    return layout(icon, f"Status: {summary}", facts, "\n".join(actions), details)
+
+
+def rich_status(f: StatusFacts) -> str:
+    icon, summary, _, health, facts, actions = _status(f)
+    calm = icon == "✅" and not f.api_failures
+    shown = ", ".join(f"{f.counts[s]} {s.lower()}" for s in (HIGH, MEDIUM, LOW) if f.counts.get(s))
+    heading = "🟢 All good" if calm else f"{'⚠️' if icon == '✅' else icon} {summary[0].upper()}{summary[1:]}"
+    on = {True: "On", False: "Off"}
+    return rich(heading,
+                table([("Pi-hole", health), ("Alerts", shown or "None"), ("Next digest", when(f.next_digest))]),
+                *(para(fact) for fact in facts[1:]), *(para(esc(line)) for line in actions),
+                fold("More", table([
+                    ("Detector", f"Up {ago(f.now - f.started)}"),
+                    (f"Lookups since {when(f.last_digest) if f.last_digest else 'start'}", f"{f.queries:,}"),
+                    ("Instant alerts", on[f.push_enabled]),
+                    ("Rotation sync", on[f.rotation_sync]),
+                    ("nmap", on[f.nmap_enabled])])))
+
+
 def format_down(failures: int, reason: str) -> str:
     return layout("🚨", "Pi-hole is not responding", [
         f"The detector couldn't reach it {failures} times in a row.",
@@ -312,6 +390,18 @@ def fit(text: str) -> str:
     if len(text) <= TELEGRAM_LIMIT:
         return text
     return text[: TELEGRAM_LIMIT - 20].rsplit("\n", 1)[0] + "\n<i>… cut short</i>"
+
+
+def ago(seconds: float) -> str:
+    """A rough span: "45 s", "12 min", "5 h", "3 d"."""
+    seconds = max(seconds, 0)
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f} min"
+    if seconds < 2 * 86400:
+        return f"{seconds / 3600:.0f} h"
+    return f"{seconds / 86400:.0f} d"
 
 
 def strip_html(text: str) -> str:
