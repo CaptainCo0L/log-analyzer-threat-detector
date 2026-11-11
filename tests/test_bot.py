@@ -6,7 +6,7 @@ from pihole_detector.bot import BOT_COMMANDS, Bot, TelegramPoller
 from pihole_detector.model import Alert, Device, Query
 from pihole_detector.model import Client
 from pihole_detector.state import State
-from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0, FakePihole
+from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0, FakePihole, press
 
 OWNER = 42
 DAY = 86400
@@ -15,12 +15,6 @@ DAY = 86400
 def message(text, chat=OWNER, sender=OWNER, date=T0, update_id=1):
     return {"update_id": update_id, "message": {"message_id": 100, "date": int(date), "text": text,
                                                 "chat": {"id": chat, "type": "private"}, "from": {"id": sender}}}
-
-
-def press(data, chat=OWNER, sender=OWNER, update_id=2, message_date=T0):
-    return {"update_id": update_id, "callback_query": {
-        "id": "cb1", "from": {"id": sender}, "data": data,
-        "message": {"message_id": 55, "date": int(message_date), "chat": {"id": chat, "type": "private"}}}}
 
 
 def make_bot(make_detector, api=None, now=T0):

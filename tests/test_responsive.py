@@ -4,7 +4,7 @@ import queue
 
 from pihole_detector.bot import Bot, TelegramPoller, start_bot
 from pihole_detector.runner import Runner
-from conftest import T0, FakePihole
+from conftest import T0, FakePihole, press
 
 OWNER = 42
 
@@ -12,12 +12,6 @@ OWNER = 42
 def message(text="/help", update_id=1):
     return {"update_id": update_id, "message": {"message_id": 100, "date": int(T0), "text": text,
                                                 "chat": {"id": OWNER, "type": "private"}, "from": {"id": OWNER}}}
-
-
-def press(data):
-    return {"update_id": 2, "callback_query": {
-        "id": "cb1", "from": {"id": OWNER}, "data": data,
-        "message": {"message_id": 55, "date": int(T0), "chat": {"id": OWNER, "type": "private"}}}}
 
 
 def service(make_detector, **cfg):

@@ -6,16 +6,10 @@ import time
 from pihole_detector.bot import Bot
 from pihole_detector.changes import wild_regex
 from pihole_detector.model import Client, Device
-from conftest import T0, FakePihole, q
+from conftest import T0, FakePihole, press, q
 
 OWNER = 42
 DAY = 86400
-
-
-def press(data, update_id=2):
-    return {"update_id": update_id, "callback_query": {
-        "id": "cb1", "from": {"id": OWNER}, "data": data,
-        "message": {"message_id": 55, "date": int(T0), "chat": {"id": OWNER, "type": "private"}}}}
 
 
 def setup(make_detector, tmp_path, api=None, **cfg):

@@ -17,12 +17,6 @@ def message(text, date=None, update_id=1):
                                                 "chat": {"id": OWNER, "type": "private"}, "from": {"id": OWNER}}}
 
 
-def press(data, update_id=2):
-    return {"update_id": update_id, "callback_query": {
-        "id": "cb1", "from": {"id": OWNER}, "data": data,
-        "message": {"message_id": 55, "date": int(T0), "chat": {"id": OWNER, "type": "private"}}}}
-
-
 def setup(make_detector, **cfg):
     det = make_detector(telegram_chat_id=str(OWNER), bot_enabled=True, push_enabled=True, dedup_hours=0, **cfg)
     return Bot(det, None, det.telegram, started=T0), det

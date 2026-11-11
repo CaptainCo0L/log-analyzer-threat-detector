@@ -4,7 +4,7 @@ import json
 
 from pihole_detector.bot import Bot
 from pihole_detector.model import Client, Device
-from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0, FakePihole
+from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0, FakePihole, press
 
 OWNER = 42
 TRACKER = r"(\.|^)tracker\.example$"
@@ -13,12 +13,6 @@ TRACKER = r"(\.|^)tracker\.example$"
 def message(text, date=T0, update_id=1):
     return {"update_id": update_id, "message": {"message_id": 100, "date": int(date), "text": text,
                                                 "chat": {"id": OWNER, "type": "private"}, "from": {"id": OWNER}}}
-
-
-def press(data, update_id=2):
-    return {"update_id": update_id, "callback_query": {
-        "id": "cb1", "from": {"id": OWNER}, "data": data,
-        "message": {"message_id": 55, "date": int(T0), "chat": {"id": OWNER, "type": "private"}}}}
 
 
 def setup(make_detector, tmp_path):
