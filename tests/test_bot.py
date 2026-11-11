@@ -357,3 +357,16 @@ def test_whois_lists_one_line_per_device_when_several_match(make_detector):
     bot.handle(message("/whois ipad"), T0)
     text = replies(det)[0]
     assert text.count("• ") == 2 and IPAD_B in text and IPAD_A not in text
+
+
+# --- groups Pi-hole couldn't give (they used to read as "no Clients entry" for every device) ---------
+
+def test_devices_and_whois_say_so_when_pihole_cant_list_groups_instead_of_no_clients_entry(make_detector):
+    for failing in ("clients", "groups"):
+        bot, det, api = make_bot(make_detector)
+        api.fail = {failing: f"GET /{failing}: HTTP 500"}
+        bot.handle(message("/devices all"), T0)
+        bot.handle(message("/whois aswinpc"), T0)
+        for text in replies(det):
+            assert "no Clients entry" not in text and "Couldn't read Pi-hole's groups (ApiError)" in text, failing
+            assert "AswinPC" in text

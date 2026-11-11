@@ -12,6 +12,7 @@ import queue
 import re
 import threading
 import time
+from typing import Callable
 from collections import Counter
 
 from .cards import BLOCK_STATUS, MUTE_STATUS, set_rich_status, set_status, swap_row
@@ -553,12 +554,15 @@ class Bot:
         self.telegram.send_document(name, text.encode("utf-8"), caption=f"Alerts of the last {days} days")
 
     # /devices -------------------------------------------------------------------------------
-    def _groups_by_mac(self) -> tuple[dict[str, tuple[int, ...]], dict[int, str]]:
+    def _membership(self) -> tuple[Callable[[str], str] | None, str]:
+        """MAC -> its groups in words, or (None, the line to show) when Pi-hole couldn't list them. Never a
+        guess: a failed read once made every device read "no Clients entry"."""
         try:
-            return {c.mac: c.groups for c in self.api.clients()}, self.api.groups()
-        except Exception:
-            log.exception("telegram: reading Pi-hole Clients failed")
-            return {}, {}
+            groups, names = {c.mac: c.groups for c in self.api.clients()}, self.api.groups()
+        except Exception as exc:
+            log.exception("telegram: reading Pi-hole Clients or groups failed")
+            return None, f"⚠️ Couldn't read Pi-hole's groups ({esc(type(exc).__name__)})"
+        return (lambda mac: ", ".join(names.get(g, str(g)) for g in groups.get(mac, ())) or "no Clients entry"), ""
 
     def _name(self, dev) -> str:
         return self.det.directory.label(dev)
@@ -575,7 +579,7 @@ class Bot:
         if problem:
             self.reply(problem)
             return
-        groups, names = self._groups_by_mac()
+        member, unread = self._membership()
         show_all = bool(args) and args[0].lower() == "all"
         devices.sort(key=lambda d: -d.last_query)
         online = [d for d in devices if now - d.last_query <= ONLINE_SECONDS]
@@ -583,12 +587,14 @@ class Bot:
         lines = [f"📶 <b>{len(online)} online</b>" + (f" · {len(devices)} known" if show_all else ""), ""]
         for d in shown:
             ip = ipv4_of(d) or "-"
-            member = ", ".join(names.get(g, str(g)) for g in groups.get(d.hwaddr, ())) or "no Clients entry"
+            groups = f" · {esc(member(d.hwaddr))}" if member else ""
             seen = "now" if now - d.last_query <= ONLINE_SECONDS else f"{ago(now - d.last_query)} ago"
-            lines.append(f"• <b>{esc(self._name(d))}</b> - {esc(ip)} · {esc(member)} · {seen}")
+            lines.append(f"• <b>{esc(self._name(d))}</b> - {esc(ip)}{groups} · {seen}")
         offline = len(devices) - len(online)
         if offline and not show_all:
             lines += ["", f"<i>{offline} offline (/devices all)</i>"]
+        if unread:
+            lines += ["", unread]
         self.reply(fit("\n".join(lines)))
 
     # /whois ---------------------------------------------------------------------------------
@@ -605,10 +611,9 @@ class Bot:
         mac = dev.hwaddr
         ip = ipv4_of(dev)
         source = self.det.directory.source(dev)
-        groups, names = self._groups_by_mac()
-        member = ", ".join(names.get(g, str(g)) for g in groups.get(mac, ())) or "no Clients entry"
+        member, unread = self._membership()
         facts = [f"Last lookup {ago(now - dev.last_query)} ago" if dev.last_query else "No lookups yet",
-                 f"Groups: {esc(member)}"]
+                 f"Groups: {esc(member(mac))}" if member else unread]
         device_of = self.det.directory.device_of
         recent = [r for r in self.det.alert_log.read(now - 30 * 86400, now) if device_of(r["device"]) == found.device]
         recent.sort(key=lambda r: -r.get("time", 0))
