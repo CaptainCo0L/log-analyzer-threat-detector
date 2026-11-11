@@ -36,3 +36,10 @@ that compares the MAC in use (`Seen.origin`).
 
 Code that changes Pi-hole builds ops with the builders in `changes.py` and runs them with
 `PiholeChanges.apply`, so every change is logged and its Undo is the inverse ops.
+
+## Buttons are made by Actions
+
+An inline button comes from a constructor on `actions.Actions` (`det.actions`), one per kind, never from a
+payload dict built at the call site. Payloads live a day in `state.db`, so buttons sent by the last deploy
+are pressed after the next one: a new field may be added, but a kind's existing payload keeps its shape
+(`tests/test_actions.py`).
