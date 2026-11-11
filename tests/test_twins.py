@@ -53,7 +53,8 @@ STATS = {"queries": 12345, "api_failures": 3}
 
 def test_a_digest_and_its_twin_say_the_same_things():
     facts = ["Kitchen iPad", "AswinPC", "Galaxy Tab", rule_title("ti_match"), rule_title("beaconing"),
-             rule_title("new_device"), "12,345", "3 failed polls", when(T0 - DAY)]
+             rule_title("new_device"), "12,345", "3 failed polls", when(T0 - DAY),
+             "login.evil-c2.example", "checkin.example"]
     assert missing(facts, rich_digest(DIGEST, STATS, T0 - DAY, T0), build_digest(DIGEST, STATS, T0 - DAY, T0)) == {}
 
 
@@ -74,3 +75,9 @@ def test_a_status_and_its_twin_say_the_same_things():
 def test_a_status_that_cant_reach_pihole_says_so_in_both():
     down = status(blocking=None, error="ApiError")
     assert missing(["Pi-hole is not reachable"], rich_status(down), format_status(down)) == {}
+
+
+def test_a_digest_row_names_one_domain_and_counts_the_rest():
+    many = [record("HIGH", "ti_match", "Kitchen iPad", d) for d in ("a.example", "b.example", "a.example", "c.example")]
+    r = strip_html(rich_digest(many, STATS, T0 - DAY, T0))
+    assert "×4" in r and "a.example +2 more" in r and "b.example" not in r

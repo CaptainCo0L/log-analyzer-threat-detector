@@ -260,13 +260,21 @@ def _plural(count: int, noun: str) -> str:
 
 
 def _digest_rows(records: list[dict]) -> list[tuple[str, str]]:
-    """One row per device and rule, the worst first."""
-    counts = Counter((r["severity"], r.get("label", "?"), r["rule"]) for items in _by_rule(records).values()
-                     for r in items)
+    """One row per device and rule, the worst first, naming its first domain: the fact a person acts on."""
+    counts: Counter = Counter()
+    domains: dict[tuple, dict[str, None]] = {}
+    for items in _by_rule(records).values():
+        for r in items:
+            key = (r["severity"], r.get("label", "?"), r["rule"])
+            counts[key] += 1
+            if r.get("domain"):
+                domains.setdefault(key, {})[r["domain"]] = None
     rows = []
     for (severity, label, rule), count in counts.items():
+        seen = list(domains.get((severity, label, rule), ()))
+        named = f" · {seen[0]}" + (f" +{len(seen) - 1} more" if len(seen) > 1 else "") if seen else ""
         rows.append((f"{SEVERITY_ICON.get(severity, '⚪')} {label}",
-                     rule_title(rule) + (f" ×{count}" if count > 1 else "")))
+                     rule_title(rule) + (f" ×{count}" if count > 1 else "") + named))
     return rows
 
 
