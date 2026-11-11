@@ -22,6 +22,7 @@ from .rules.devices import IotOffBaseline, new_devices, silent_devices
 from .rules.intel_rules import DohBypass, ThreatIntelMatch
 from .rules.randomness import DgaSingle, NxdomainBurst
 from .rules.traffic import Beaconing, Tunneling
+from .actions import Actions
 from .delivery import Delivery
 from .alertlog import AlertLog
 from .sinks import build_digest, rich_digest
@@ -44,8 +45,9 @@ class Detector:
         self.probe = probe
         self.alert_log = alert_log
         self.telegram = telegram
-        self.delivery = Delivery(cfg, state, telegram)
-        self.rotations = RotationHandler(cfg, state, self.directory, self.changes, self.delivery)
+        self.actions = Actions(state)
+        self.delivery = Delivery(cfg, state, telegram, self.actions)
+        self.rotations = RotationHandler(cfg, state, self.directory, self.changes, self.delivery, self.actions)
         self.ctx = Context(cfg=cfg, state=state, intel=intel, noisy=DomainSet(cfg.noisy_apexes),
                            baseline=Baseline(state, cfg))
         self.rules = [ThreatIntelMatch(), DohBypass(), DgaSingle(), NxdomainBurst(),
@@ -215,8 +217,7 @@ class Detector:
         buttons = None
         if self.cfg.bot_enabled and records:
             days = max(1, round((now - (last or now)) / 86400))
-            full = self.delivery.button("📄 Full report", {"kind": "full_report", "days": days, "end": now}, now)
-            buttons = [*self.delivery.block_rows(records, now, limit=5), [full]]
+            buttons = [*self.actions.block_rows(records, now, limit=5), [self.actions.full_report(days, now, now)]]
         rich = rich_digest(records, stats, last or now, now) if records else None
         sent = self.delivery.send_rich(rich, text, buttons)
         # The digest doubles as the heartbeat, so leave a trace of it either way.

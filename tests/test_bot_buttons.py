@@ -58,13 +58,12 @@ def test_an_unblocked_threat_push_has_block_and_mute(make_detector, tmp_path):
 
 
 def test_a_domain_block_cant_take_offers_its_command_to_copy(make_detector, tmp_path):
-    from pihole_detector.delivery import alert_buttons
     from pihole_detector.model import Alert
     _, det, _ = setup(make_detector, tmp_path)
     command = "sudo docker exec pihole pihole --wild under_score.example"
     alert = Alert(time=T0, severity="HIGH", rule="ti_match", label="TV", domain="under_score.example", message="m",
                   evidence={"block": command})
-    rows = alert_buttons(det.state, alert, T0)
+    rows = det.actions.alert_buttons(alert, T0)
     assert rows[0][0]["copy_text"]["text"] == command and "Mute" in rows[1][0]["text"]
 
 
@@ -190,14 +189,14 @@ def test_a_digest_with_alerts_offers_the_full_report(make_detector, tmp_path):
 
 
 def test_no_block_button_unless_the_target_is_a_plain_domain():
-    from pihole_detector.delivery import alert_buttons
+    from pihole_detector.actions import Actions
     from pihole_detector.model import Alert
     from pihole_detector.state import State
     for command in ("sudo docker exec pihole pihole --wild *", "sudo docker exec pihole pihole --wild a;b",
                     "sudo docker exec pihole pihole --wild localhost"):
         alert = Alert(time=T0, severity="HIGH", rule="ti_match", label="c", domain="d", message="m",
                       evidence={"block": command}, dedup="ti_match|c|d")
-        labels = [b["text"] for row in alert_buttons(State(), alert, T0) for b in row]
+        labels = [b["text"] for row in Actions(State()).alert_buttons(alert, T0) for b in row]
         assert not any("Block" in label and "Copy" not in label for label in labels), command
 
 

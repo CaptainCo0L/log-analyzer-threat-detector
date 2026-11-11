@@ -13,7 +13,8 @@ from . import yearlog
 from .changes import PiholeChanges
 from .bot import start_bot
 from .config import Config
-from .delivery import Delivery, alert_buttons
+from .actions import Actions
+from .delivery import Delivery
 from .rules import block_hint
 from .detector import Detector
 from .discovery import discover, nmap_options
@@ -245,8 +246,9 @@ def cmd_preview(cfg: Config, tg=None, state=None) -> int:
     )
     own = state is None
     state = state or State(cfg.state_db if cfg.bot_enabled else ":memory:")
-    delivery = Delivery(cfg, state, tg)
-    buttons = alert_buttons(state, sample, now) if cfg.bot_enabled else None
+    actions = Actions(state)
+    delivery = Delivery(cfg, state, tg, actions)
+    buttons = actions.alert_buttons(sample, now) if cfg.bot_enabled else None
     records = [
         {**sample.to_dict()},
         {"severity": "MEDIUM", "rule": "beaconing", "label": "AswinPC", "domain": "checkin.example",

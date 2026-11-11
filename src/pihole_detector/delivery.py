@@ -15,7 +15,7 @@ from collections import deque
 
 from .alertlog import upgrade
 from .model import HIGH
-from .sinks import SEVERITY_ICON, esc, fit, format_push, needs_attention, rich_push, rule_title, when
+from .sinks import SEVERITY_ICON, esc, fit, format_push, rich_push, rule_title, when
 
 log = logging.getLogger(__name__)
 APEX = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")  # a plain domain: safe to put in a Block button
@@ -50,36 +50,9 @@ def block_target(evidence: dict | None) -> str | None:
     return target if APEX.fullmatch(target) else None
 
 
-def action_button(state, label: str, payload: dict, now: float, style: str | None = None) -> dict:
-    btn = {"text": label, "callback_data": f"a:{state.add_action(payload, now)}"}
-    if style:
-        btn["style"] = style
-    return btn
-
-
-def mute_row(state, rule: str, ident: str, label: str, now: float) -> list[dict]:
-    mute = {"kind": "mute", "rule": rule, "ident": ident, "label": label}
-    return [action_button(state, "Mute 24 h", {**mute, "hours": 24}, now),
-            action_button(state, "Mute 7 d", {**mute, "hours": 168}, now)]
-
-
-def alert_buttons(state, alert, now: float) -> list[list[dict]]:
-    """Block when the domain resolved, else the NAS command to copy, then mute this rule for this device."""
-    rows = []
-    command = (alert.evidence or {}).get("block")
-    target = block_target(alert.evidence)
-    if target:
-        block = {"kind": "block", "domain": target, "alert": alert.to_dict()}  # the alert, to bring back its heading
-        rows.append([action_button(state, f"Block {target}", block, now, "primary")])
-    elif command and len(command) <= 256:  # copy_text holds 1-256 characters
-        rows.append([{"text": "📋 Copy block command", "copy_text": {"text": command}}])
-    rows.append(mute_row(state, alert.rule, alert.device, alert.label, now))
-    return rows
-
-
 class Delivery:
-    def __init__(self, cfg, state, telegram):
-        self.cfg, self.state, self.telegram = cfg, state, telegram
+    def __init__(self, cfg, state, telegram, actions):
+        self.cfg, self.state, self.telegram, self.actions = cfg, state, telegram, actions
         self._pushed: deque[float] = deque()  # times of the pushes in the last hour
         self._over_cap = False
 
@@ -94,9 +67,6 @@ class Delivery:
             return True
         return self.send(text, buttons)
 
-    def button(self, label: str, payload: dict, now: float, style: str | None = None) -> dict:
-        return action_button(self.state, label, payload, now, style)
-
     def route(self, alert) -> None:
         """An alert that was just logged: push it, hold it, or leave it to the digest."""
         if alert.severity != HIGH or not self.cfg.push_enabled or self.is_muted(alert, alert.time):
@@ -104,7 +74,7 @@ class Delivery:
         if self.hold_reason(alert.time):
             self._hold(alert)  # sent as one summary when /mute or quiet hours end
             return
-        buttons = alert_buttons(self.state, alert, alert.time) if self.cfg.bot_enabled else None
+        buttons = self.actions.alert_buttons(alert, alert.time) if self.cfg.bot_enabled else None
         hint = not buttons
         self._push(alert, hint, buttons)
 
@@ -165,14 +135,7 @@ class Delivery:
                          f"{esc(rule_title(r['rule']))}{domain}")
         if len(held) > 20:
             lines.append(f"<i>+{len(held) - 20} more in the digest</i>")
-        return fit("\n".join(lines)), self.block_rows(held, now, limit=10)
-
-    def block_rows(self, records: list[dict], now: float, limit: int) -> list[list[dict]]:
-        """One Block button per domain that needs attention, HIGH alerts first."""
-        urgent = sorted((r for r in records if needs_attention(r)), key=lambda r: r["severity"] != HIGH)
-        targets = dict.fromkeys(t for r in urgent if (t := block_target(r.get("evidence"))))
-        return [[self.button(f"Block {t}", {"kind": "block", "domain": t}, now, "primary")]
-                for t in list(targets)[:limit]]
+        return fit("\n".join(lines)), self.actions.block_rows(held, now, limit=10)
 
     # muting ---------------------------------------------------------------------------------
     def is_muted(self, alert, now: float) -> bool:

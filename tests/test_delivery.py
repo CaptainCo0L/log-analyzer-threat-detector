@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 from pihole_detector.config import Config
+from pihole_detector.actions import Actions
 from pihole_detector.delivery import Delivery
 from pihole_detector.model import Alert
 from pihole_detector.state import State
@@ -13,7 +14,8 @@ def alert(t, severity="HIGH"):
 
 
 def delivery(**cfg):
-    return Delivery(Config(push_enabled=True, rich_messages=False, **cfg), State(":memory:"), FakeTelegram())
+    state = State(":memory:")
+    return Delivery(Config(push_enabled=True, rich_messages=False, **cfg), state, FakeTelegram(), Actions(state))
 
 
 def test_the_push_cap_notice_points_at_the_digest():

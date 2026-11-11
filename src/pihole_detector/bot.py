@@ -20,7 +20,8 @@ from .directory import Found
 from .domains import apex
 from .names import ipv4_of
 from .report import build_report
-from .delivery import APEX, MAX_MUTE, QUIET, in_quiet, mute_row
+from .actions import TOASTS
+from .delivery import APEX, MAX_MUTE, QUIET, in_quiet
 from .sinks import (SEVERITY_ICON, TELEGRAM_LIMIT, esc, fit, fold, layout, para, push_heading, rich, rule_title,
                     severity_line, table, when)
 from .source import ApiError, PiholeClient
@@ -58,10 +59,6 @@ STALE_SECONDS = 300
 ONLINE_SECONDS = 900
 MAX_REPORT_DAYS = 30
 SEE_STATUS = "/status shows whether Pi-hole is up."
-# Said the moment a button is pressed; the result then appears in the chat. Telegram allows one answer per press.
-PRESS_TOASTS = {"block": "Blocking…", "unblock": "Unblocking…", "mute": "Muting…", "unmute": "Unmuting…",
-                "unmute_all": "Ending the hold…", "ops": "Working…", "undo_rotation": "Undoing…",
-                "full_report": "Sending the full report…"}
 
 
 def _display_setting(value):
@@ -122,7 +119,7 @@ def start_bot(det, api, run: bool = True):
 class Bot:
     def __init__(self, det, api: PiholeClient, telegram, started: float | None = None):
         self.det, self.api, self.telegram = det, api, telegram
-        self.delivery = det.delivery
+        self.delivery, self.actions = det.delivery, det.actions
         self.changes = det.changes  # one owner of the change logs; its API is this same api
         self.started = started if started is not None else time.time()
         self.owner = str(det.cfg.telegram_chat_id)
@@ -181,7 +178,7 @@ class Bot:
 
     def on_press(self, cb: dict, now: float) -> None:
         data = cb.get("data") or ""
-        payload = self.det.state.take_action(data[2:], now) if data.startswith("a:") else None
+        payload = self.actions.take(data, now)
         if payload is None:
             self.telegram.answer_callback(cb.get("id", ""), "This button has expired. Use a command instead, "
                                                            "e.g. /report or /status.")
@@ -190,7 +187,7 @@ class Bot:
         if not handler:
             self.telegram.answer_callback(cb.get("id", ""), "Unknown button.")
             return
-        self.telegram.answer_callback(cb.get("id", ""), PRESS_TOASTS.get(payload.get("kind"), ""))
+        self.telegram.answer_callback(cb.get("id", ""), TOASTS.get(payload.get("kind"), ""))
         handler(payload, now, cb)
 
     def reply(self, text: str, buttons=None) -> bool:
@@ -222,7 +219,7 @@ class Bot:
         domain = payload["domain"]
         if not self._apply(f"Block button {domain}", list_wild("deny", domain), now):
             return
-        undo = self.delivery.button("Undo block", {**payload, "kind": "unblock"}, now)
+        undo = self.actions.unblock(domain, now, payload.get("alert"))
         pushed = "alert" in payload  # only a push is about this one domain, so only a push changes its heading
         self._settle(cb, BLOCK_STATUS, domain, f"🛡 Blocked {domain} and all its subdomains for everyone.", [undo],
                      f"🟢 Blocked {domain} and its subdomains" if pushed else "", "" if pushed else None)
@@ -232,7 +229,7 @@ class Bot:
         block = list_wild("deny", domain)
         if not self._apply(f"Undo Block button {domain}", Change(block.undo or [], block.ops), now):
             return
-        again = self.delivery.button(f"Block {domain}", {**payload, "kind": "block"}, now, "primary")
+        again = self.actions.block(domain, now, payload.get("alert"))
         record = payload.get("alert")
         self._settle(cb, BLOCK_STATUS, domain, f"↩️ Unblocked {domain}.", [again],
                      push_heading(Alert.from_dict(record)) if record else "")
@@ -242,7 +239,7 @@ class Bot:
         self.delivery.mute(payload["rule"], payload["ident"], now + hours * 3600)
         title = rule_title(payload["rule"])
         span = f"{hours // 24} d" if hours >= 48 else f"{hours} h"
-        undo = self.delivery.button("Undo mute", {**payload, "kind": "unmute"}, now)
+        undo = self.actions.unmute(payload["rule"], payload["ident"], payload["label"], hours, now)
         self._settle(cb, MUTE_STATUS, "", f"🔕 Muted {title} for {payload['label']} for {span}, until "
                      f"{when(now + hours * 3600)}. Those alerts are still logged and in the digest.", [undo])
 
@@ -250,7 +247,7 @@ class Bot:
         rule, ident, label = payload["rule"], payload["ident"], payload["label"]
         self.delivery.mute(rule, ident, 0)
         self._settle(cb, MUTE_STATUS, "", f"🔔 Unmuted {rule_title(rule)} for {label}.",
-                     mute_row(self.det.state, rule, ident, label, now))
+                     self.actions.mute_row(rule, ident, label, now))
 
     def press_undo_rotation(self, payload: dict, now: float, cb: dict | None = None) -> None:
         change, why_not = self.changes.pending_sync(payload["time"])
@@ -286,7 +283,7 @@ class Bot:
                      text: str = "↩️ Undone.") -> list | None:
         if not undo:
             return None
-        return [[self.delivery.button(label, {"kind": "ops", "ops": undo, "command": "undo", "text": text}, now)]]
+        return [[self.actions.ops(label, undo, "undo", text, now)]]
 
     def press_ops(self, payload: dict, now: float, cb: dict | None = None) -> None:
         """An Undo, or a confirmed change: run the stored ops."""
@@ -422,9 +419,8 @@ class Bot:
             return
         command = f"/group {' '.join(args)}"
         if remove:
-            confirm = self.delivery.button(f"✅ Remove from {groups[gid]}", {
-                "kind": "ops", "ops": change.ops, "undo": change.undo, "command": command,
-                "text": f"👥 Removed {label} from <b>{name}</b>."}, now, style="danger")
+            confirm = self.actions.ops(f"✅ Remove from {groups[gid]}", change.ops, command,
+                                       f"👥 Removed {label} from <b>{name}</b>.", now, undo=change.undo, style="danger")
             self.reply(f"Remove {label} from <b>{name}</b>? That changes which lists block things for it.",
                        buttons=[[confirm]])
             return
@@ -436,7 +432,7 @@ class Bot:
         seconds = int(match[1]) * {"m": 60, "h": 3600, "d": 86400}[match[2]] if match else 3600
         seconds = min(max(seconds, 60), MAX_MUTE)
         self.delivery.mute_all(now + seconds)
-        unmute = self.delivery.button("🔔 End the hold", {"kind": "unmute_all"}, now)
+        unmute = self.actions.unmute_all(now)
         self.reply(f"🔕 Instant alerts held until {esc(when(now + seconds))}. They're still logged, and you'll "
                    "get them in one message when it ends. Health and rotation messages still come through.",
                    buttons=[[unmute]])
@@ -593,7 +589,7 @@ class Bot:
             if len(body) > room:
                 body = body[:room].rsplit("\n", 1)[0] + "\n…"
             lines += ["", f"<blockquote expandable>{body}</blockquote>"]
-        full = self.delivery.button("📄 Full report", {"kind": "full_report", "days": days, "end": now}, now)
+        full = self.actions.full_report(days, now, now)
         self.reply("\n".join(lines), buttons=[[full]])
 
     def press_full_report(self, payload: dict, now: float, cb: dict | None = None) -> None:

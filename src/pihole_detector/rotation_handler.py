@@ -15,9 +15,9 @@ log = logging.getLogger(__name__)
 
 
 class RotationHandler:
-    def __init__(self, cfg, state, directory, changes, delivery):
+    def __init__(self, cfg, state, directory, changes, delivery, actions):
         self.cfg, self.state, self.directory = cfg, state, directory
-        self.changes, self.delivery = changes, delivery
+        self.changes, self.delivery, self.actions = changes, delivery, actions
 
     def answered(self, mac: str, name: str, source: str, now: float, last_seen: dict[str, float]) -> str | None:
         """A MAC answered with this name. The device's previous MAC if that makes it a rotation, else None."""
@@ -57,6 +57,6 @@ class RotationHandler:
             groups = api.groups()
         except Exception:
             groups = {}
-        undo = ([[self.delivery.button("↩️ Undo", {"kind": "undo_rotation", "time": now}, now)]]
+        undo = ([[self.actions.undo_rotation(now, now)]]
                 if self.cfg.bot_enabled else None)
         self.delivery.send(format_sync(name, plan.add, deleted, groups, error), undo)

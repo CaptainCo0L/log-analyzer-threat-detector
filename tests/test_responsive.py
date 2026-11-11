@@ -3,7 +3,6 @@
 import queue
 
 from pihole_detector.bot import Bot, TelegramPoller, start_bot
-from pihole_detector.delivery import action_button
 from pihole_detector.runner import Runner
 from conftest import T0, FakePihole
 
@@ -108,7 +107,7 @@ def test_a_press_is_acknowledged_before_pihole_is_asked(make_detector):
         real(*args, **kwargs)
 
     api.add_domain = add_domain
-    data = action_button(det.state, "Block", {"kind": "block", "domain": "evil.example"}, T0)["callback_data"]
+    data = det.actions.block("evil.example", T0)["callback_data"]
     bot.handle(press(data), T0)
     assert seen_at_write == ["answerCallbackQuery"]
     assert det.telegram.payloads("answerCallbackQuery")[0]["text"] == "Blocking…"
@@ -118,7 +117,7 @@ def test_every_press_is_answered_exactly_once(make_detector):
     api = FakePihole(fail={"add_domain": "POST: HTTP 400"})
     det = make_detector(telegram_chat_id=str(OWNER), bot_enabled=True, api=api)
     bot = Bot(det, api, det.telegram, started=T0)
-    data = action_button(det.state, "Block", {"kind": "block", "domain": "evil.example"}, T0)["callback_data"]
+    data = det.actions.block("evil.example", T0)["callback_data"]
     bot.handle(press(data), T0)
     assert len(det.telegram.payloads("answerCallbackQuery")) == 1
     assert "HTTP 400" in det.telegram.messages[-1]
