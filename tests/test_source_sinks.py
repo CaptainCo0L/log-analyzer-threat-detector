@@ -85,6 +85,20 @@ def test_queries_since_pages_backwards_without_gaps_or_duplicates():
     assert ftl.logins == 1
 
 
+def test_a_domain_that_is_not_utf8_does_not_fail_the_poll():
+    # FTL escapes control bytes but passes invalid UTF-8 through raw: a PlayStation sent this name.
+    rows = api_rows(3)
+    rows[1]["domain"] = "BAD"
+    ftl = FakeFtl(rows)
+
+    def opener(req, timeout=None):
+        resp = ftl(req, timeout)
+        return FakeResp(resp.getvalue().replace(b'"BAD"', b'"\xd0\x98\x88\\u000b\\u0002"'))
+
+    got = PiholeApi("http://pihole:8081", "pw", opener=opener).queries_since(T0)
+    assert [q.domain for q in got] == ["d0.example", "и�\x0b\x02", "d2.example"]
+
+
 def test_overlapping_timestamps_across_pages():
     rows = api_rows(30, step=0)   # all at the same instant, ids differ
     api = PiholeApi("http://pihole:8081", "pw", opener=FakeFtl(rows))

@@ -69,7 +69,8 @@ class PiholeApi:
             req.add_header("X-FTL-SID", self.sid)
         with self.opener(req, timeout=self.timeout) as resp:
             raw = resp.read()
-        return json.loads(raw) if raw else {}
+        # FTL passes a client's non-UTF-8 query name through raw; one such query would fail every poll.
+        return json.loads(raw.decode("utf-8", "replace")) if raw else {}
 
     def login(self) -> None:
         try:
