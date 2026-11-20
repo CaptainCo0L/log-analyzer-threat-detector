@@ -58,7 +58,9 @@ because a burst needs 20 *distinct* such names answered NXDOMAIN.
 
 This rule counts per (client, apex) over a 10-minute sliding window. Large platforms legitimately
 fan out across thousands of subdomains (`*.googlevideo.com` for YouTube, CDNs, Apple, Microsoft),
-so `NOISY_APEXES` exempts them. **Setting `NOISY_APEXES` replaces the default list instead of
+so `NOISY_APEXES` exempts them. Added from live alerts: `playstation.net` (a PS5 waking up looks up
+~80 `*.rnps.dl.playstation.net` UI asset hosts at once) and the TV's streaming channel CDNs
+`akamaized.net`, `amagi.tv`, `wurl.tv` and `cablecast.tv`. **Setting `NOISY_APEXES` replaces the default list instead of
 extending it**, so copy the defaults from `config.py` when overriding.
 
 ## Beaconing

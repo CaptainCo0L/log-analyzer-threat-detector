@@ -1,3 +1,5 @@
+import pytest
+
 from pihole_detector.model import Device
 from conftest import IOT_IP, IOT_MAC, PC_IP, PC_MAC, T0, q, rules_of
 
@@ -160,6 +162,15 @@ def test_tunneling_below_threshold_and_noisy_apex(make_detector):
         assert "tunneling" not in rules_of(det.process_query(q(f"c{i:04d}.exfil.example", t=i)))
     for i in range(80):
         assert "tunneling" not in rules_of(det.process_query(q(f"rr{i}---sn-abc.googlevideo.com", t=i)))
+
+
+@pytest.mark.parametrize("apex", ["playstation.net", "akamaized.net", "amagi.tv", "wurl.tv", "cablecast.tv"])
+def test_tunneling_ignores_console_and_tv_streaming_fanout(make_detector, apex):
+    # A PS5 waking up fetches ~80 *.rnps.dl.playstation.net names; FAST TV channels do the same on their CDNs.
+    det = make_detector(tunnel_unique_subdomains=50, tunnel_long_label_count=10)
+    for i in range(80):
+        name = f"module{i}-lambda.rnps.dl.{apex}" if i % 2 else f"{'a' * 45}{i}.{apex}"
+        assert "tunneling" not in rules_of(det.process_query(q(name, t=i)))
 
 
 def test_tunneling_long_labels_and_txt(make_detector):

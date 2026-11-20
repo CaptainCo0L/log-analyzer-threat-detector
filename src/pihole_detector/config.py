@@ -11,6 +11,8 @@ DEFAULT_NOISY_APEXES = (
     "akamaihd.net", "akamaiedge.net", "akamai.net", "cloudfront.net", "amazonaws.com", "fastly.net",
     "apple.com", "icloud.com", "aaplimg.com", "microsoft.com", "windows.com", "live.com", "msn.com",
     "azureedge.net", "trafficmanager.net", "steamcontent.com", "netflix.com", "nflxvideo.net",
+    # PS5 (~80 *.rnps.dl names on wake) and the TV's streaming channels: all live tunneling false positives.
+    "playstation.net", "akamaized.net", "amagi.tv", "wurl.tv", "cablecast.tv",
     "in-addr.arpa", "ip6.arpa", "local", "lan", "home.arpa",
 )
 
